@@ -1,0 +1,58 @@
+{
+  "1": {
+    "id": 1,
+    "title": "A Threat Within",
+    "min_level": 1, "max_level": 8,
+    "faction": "alliance",
+    "description": "Marshal McBride has asked you to report to Deputy Willem.",
+    "objectives": [],
+    "reward_xp": 40,
+    "rewards": []
+  },
+  "2": {
+    "id": 2,
+    "title": "Kobold Camp Cleanup",
+    "min_level": 1, "max_level": 8,
+    "faction": "alliance",
+    "description": "Kill 10 Kobold Vermin and return to Marshal McBride.",
+    "objectives": [
+      {"type": "kill", "npc": "Kobold Vermin", "count": 10}
+    ],
+    "reward_xp": 250,
+    "rewards": [{"item_id": 117, "count": 2}]
+  },
+  "3": {
+    "id": 3,
+    "title": "Rest and Relaxation",
+    "min_level": 1, "max_level": 60,
+    "faction": "both",
+    "description": "Speak to the innkeeper to rest.",
+    "objectives": [],
+    "reward_xp": 0,
+    "rewards": []
+  },
+  "4": {
+    "id": 4,
+    "title": "Wolves Across the Border",
+    "min_level": 2, "max_level": 10,
+    "faction": "horde",
+    "description": "Kill 8 Young Forest Wolves near the Valley of Trials.",
+    "objectives": [
+      {"type": "kill", "npc": "Young Forest Wolf", "count": 8}
+    ],
+    "reward_xp": 290,
+    "rewards": [{"item_id": 39, "count": 2}]
+  },
+  "5": {
+    "id": 5,
+    "title": "Encrypted Tablet",
+    "min_level": 5, "max_level": 15,
+    "faction": "both",
+    "description": "Recover the Encrypted Tablet from the Defias camp and bring it to Scholar Fannet.",
+    "objectives": [
+      {"type": "item", "item_id": 1234, "item_name": "Encrypted Tablet", "count": 1}
+    ],
+    "reward_xp": 700,
+    "rewards": [{"item_id": 3928, "count": 3}]
+  }
+}
