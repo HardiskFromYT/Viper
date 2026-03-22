@@ -492,16 +492,12 @@ class Module(BaseModule):
 
     def _worldport_ack(self, session, payload: bytes):
         """Handle MSG_MOVE_WORLDPORT_ACK — client finished loading after cross-map teleport.
-        Re-send all world init packets so the client can interact again."""
+        Always re-send the full login sequence so the client can move and interact."""
         if not session.char:
-            return
-        pending = getattr(session, '_pending_teleport', False)
-        if not pending:
-            log.debug("WORLDPORT_ACK received but no pending teleport")
             return
         session._pending_teleport = False
         log.info(f"WORLDPORT_ACK from {session.char['name']} — re-sending world init")
-        _send_world_init_packets(session, session.char, is_login=False)
+        _send_world_init_packets(session, session.char, is_login=True)
 
     def _teleport_ack(self, session, payload: bytes):
         """Handle MSG_MOVE_TELEPORT_ACK — client confirms same-map teleport."""

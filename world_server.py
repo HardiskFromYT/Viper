@@ -96,14 +96,15 @@ class WorldSession(asyncio.Protocol):
 
     def send_sys_msg(self, msg: str):
         """Send a CHAT_MSG_SYSTEM message (blue text in chat).
-        Vanilla 1.12.1 format: type(u8) + lang(u32) + senderGUID(u64) + msglen(u32) + msg + tag(u8)
-        NO unk/targetGUID fields for system messages.
+        Vanilla 1.12.1 SMSG_MESSAGECHAT: type(u8) + lang(u32) + senderGUID(u64) +
+          unk(u32) + msglen(u32) + msg(null-term) + tag(u8)
         """
         msg_bytes = msg.encode("utf-8")
         buf = ByteBuffer()
         buf.uint8(CHAT_MSG_SYSTEM)       # type
         buf.uint32(0)                     # language (LANG_UNIVERSAL)
         buf.uint64(0)                     # sender GUID (0 for system)
+        buf.uint32(0)                     # unk (required by 1.12 client)
         buf.uint32(len(msg_bytes) + 1)   # message length (including null)
         buf.raw(msg_bytes + b"\x00")     # message + null terminator
         buf.uint8(0)                      # chat tag (CHAT_TAG_NONE)

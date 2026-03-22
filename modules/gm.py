@@ -13,6 +13,40 @@ from modules.core_world import teleport_player
 
 log = logging.getLogger("gm")
 
+# Named teleport locations: name -> (map_id, x, y, z)
+_NAMED_LOCATIONS = {
+    # Alliance cities
+    "stormwind":    (0, -8833.37,  628.62,   94.00),
+    "ironforge":    (0, -4981.25, -881.54,  501.76),
+    "darnassus":    (1,  9952.07, 2280.32,  1341.39),
+    "exodar":       (530, -3961.64, -13931.2, 100.61),
+    # Horde cities
+    "orgrimmar":    (1,  1526.00, -4421.00,   6.00),
+    "undercity":    (0,  1596.01,  240.44,  -65.00),
+    "thunderbluff": (1, -1282.73, 141.56,  131.33),
+    "silvermoon":   (530, 9369.81, -7368.74,  14.23),
+    # Shattrath
+    "shattrath":    (530, -1836.21, 5301.35, -12.43),
+    # Neutral
+    "gadgetzan":    (1, -7178.24, -3804.52,   8.91),
+    "booty":        (0, -14353.9, 532.1,     23.0),
+    "bootybay":     (0, -14353.9, 532.1,     23.0),
+    "mudsprocket":  (1, -4425.0, -1134.0,    26.0),
+    # Instances / special
+    "gmisland":     (1, 16222.0,  16265.0,   14.0),
+    "gm":           (1, 16222.0,  16265.0,   14.0),
+    # Starting zones (Alliance)
+    "northshire":   (0,  -8913.0, -117.0,   80.0),
+    "coldridge":    (0,  -6240.0,  331.0,   382.0),
+    "teldrassil":   (1,  10311.0,  832.0,  1326.0),
+    # Starting zones (Horde)
+    "durotar":      (1,   -618.0, -4251.0,   38.7),
+    "tirisfal":     (0,   -284.0,  1687.0,   89.0),
+    "mulgore":      (1,  -2918.0,  -258.0,   53.0),
+    # Other
+    "dalaran":      (0,   534.0,    -804.0,  96.0),
+}
+
 CHAT_MSG_SAY    = 0
 CHAT_MSG_YELL   = 5
 CHAT_MSG_SYSTEM = 10
@@ -62,9 +96,11 @@ class Module(BaseModule):
         self.reg_gm(server, "info",      self._cmd_info,
                     help_text=".info  — show your position / account info", min_gm=1)
         self.reg_gm(server, "teleport",  self._cmd_teleport,
-                    help_text=".teleport <x> <y> <z> [map]  — teleport", min_gm=1)
+                    help_text=".teleport <name|x y z [map]>  — teleport to location or coords", min_gm=1)
         self.reg_gm(server, "tel",       self._cmd_teleport,
-                    help_text=".tel <x> <y> <z> [map]", min_gm=1)
+                    help_text=".tel <name|x y z [map]>", min_gm=1)
+        self.reg_gm(server, "tele",      self._cmd_teleport,
+                    help_text=".tele <name|x y z [map]>", min_gm=1)
         self.reg_gm(server, "level",     self._cmd_level,
                     help_text=".level <n>  — set your level", min_gm=1)
         self.reg_gm(server, "heal",      self._cmd_heal,
@@ -150,27 +186,26 @@ class Module(BaseModule):
         session.send_sys_msg("\n".join(lines))
 
     def _cmd_teleport(self, session, args):
+        if not args:
+            session.send_sys_msg("Usage: .tele <name>  or  .tele <x> <y> <z> [map]")
+            return
+        # Named location?
+        name = args[0].lower()
+        if name in _NAMED_LOCATIONS:
+            map_id, x, y, z = _NAMED_LOCATIONS[name]
+            teleport_player(session, map_id, x, y, z, 0.0)
+            return
+        # Coordinate teleport
         if len(args) < 3:
-            session.send_sys_msg("Usage: .teleport <x> <y> <z> [map]")
+            session.send_sys_msg("Usage: .tele <name>  or  .tele <x> <y> <z> [map]")
             return
         try:
             x, y, z = float(args[0]), float(args[1]), float(args[2])
             map_id = int(args[3]) if len(args) > 3 else (session.char["map"] if session.char else 0)
         except ValueError:
-            session.send_sys_msg("Arguments must be numbers.")
+            session.send_sys_msg("Invalid coordinates. Usage: .tele <x> <y> <z> [map]")
             return
-        buf = ByteBuffer()
-        buf.uint32(map_id)
-        buf.float32(x); buf.float32(y); buf.float32(z); buf.float32(0.0)
-        session._send(SMSG_NEW_WORLD, buf.bytes())
-        if session.char:
-            update_char_position(session.db_path, session.char["id"],
-                                 map_id, x, y, z, 0.0)
-            # Update local cache
-            session.char = dict(session.char)
-            session.char.update({"map": map_id, "pos_x": x, "pos_y": y,
-                                  "pos_z": z, "orientation": 0.0})
-        session.send_sys_msg(f"Teleported to {x:.1f}, {y:.1f}, {z:.1f} (map {map_id}).")
+        teleport_player(session, map_id, x, y, z, 0.0)
 
     def _cmd_level(self, session, args):
         if not args:
@@ -230,6 +265,7 @@ class Module(BaseModule):
         buf.uint8(CHAT_MSG_SYSTEM)
         buf.uint32(0)                     # language
         buf.uint64(0)                     # sender guid (system)
+        buf.uint32(0)                     # unk (required by 1.12 client)
         buf.uint32(len(msg_bytes) + 1)   # message length
         buf.raw(msg_bytes + b"\x00")     # message + null
         buf.uint8(0)                      # chat tag
@@ -298,16 +334,20 @@ class Module(BaseModule):
 
 
 def _broadcast_say(session, msg: str, msg_type: int):
-    """Echo player's own message back as SAY (basic self-echo).
-    Vanilla 1.12 SAY format: type(u8) + lang(u32) + senderGUID(u64) + msglen(u32) + msg + tag(u8)
+    """Broadcast player chat to all online players.
+    Vanilla 1.12 SMSG_MESSAGECHAT: type(u8) + lang(u32) + senderGUID(u64) +
+      unk(u32) + msglen(u32) + msg(null-term) + tag(u8)
     """
     guid = session.char["id"] if session.char else 0
     msg_bytes = msg.encode("utf-8")
     buf = ByteBuffer()
-    buf.uint8(CHAT_MSG_SAY)
-    buf.uint32(0)                     # language
+    buf.uint8(msg_type & 0xFF)        # chat type
+    buf.uint32(0)                     # language (LANG_UNIVERSAL)
     buf.uint64(guid)                  # sender guid
-    buf.uint32(len(msg_bytes) + 1)   # message length
-    buf.raw(msg_bytes + b"\x00")     # message + null
+    buf.uint32(0)                     # unk (required by 1.12 client)
+    buf.uint32(len(msg_bytes) + 1)   # message length (including null)
+    buf.raw(msg_bytes + b"\x00")     # message + null terminator
     buf.uint8(0)                      # chat tag
-    session._send(SMSG_MESSAGECHAT, buf.bytes())
+    data = buf.bytes()
+    for s in session.server.get_online_players():
+        s._send(SMSG_MESSAGECHAT, data)
