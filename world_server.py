@@ -95,20 +95,28 @@ class WorldSession(asyncio.Protocol):
         self.transport.write(bytes(header) + data)
 
     def send_sys_msg(self, msg: str):
-        """Send a CHAT_MSG_SYSTEM message (blue text in chat).
-        Vanilla 1.12.1 SMSG_MESSAGECHAT: type(u8) + lang(u32) + senderGUID(u64) +
-          unk(u32) + msglen(u32) + msg(null-term) + tag(u8)
+        """Dispatch to modules.gm.send_sys_msg so that 'reload gm' hot-reloads
+        the implementation without needing a server restart.
+        The actual packet format lives in gm.py — update it there.
         """
-        msg_bytes = msg.encode("utf-8")
-        buf = ByteBuffer()
-        buf.uint8(CHAT_MSG_SYSTEM)       # type
-        buf.uint32(0)                     # language (LANG_UNIVERSAL)
-        buf.uint64(0)                     # sender GUID (0 for system)
-        buf.uint32(0)                     # unk (required by 1.12 client)
-        buf.uint32(len(msg_bytes) + 1)   # message length (including null)
-        buf.raw(msg_bytes + b"\x00")     # message + null terminator
-        buf.uint8(0)                      # chat tag (CHAT_TAG_NONE)
-        self._send(SMSG_MESSAGECHAT, buf.bytes())
+        import sys
+        gm = sys.modules.get("modules.gm")
+        if gm and hasattr(gm, "send_sys_msg"):
+            log.debug(f"send_sys_msg → gm module (msg={msg!r})")
+            try:
+                gm.send_sys_msg(self, msg)
+            except Exception as exc:
+                log.exception(f"send_sys_msg raised: {exc}")
+        else:
+            log.warning(f"send_sys_msg fallback — gm={gm} (msg={msg!r})")
+            msg_bytes = msg.encode("utf-8")
+            buf = ByteBuffer()
+            buf.uint8(CHAT_MSG_SYSTEM)
+            buf.uint32(0); buf.uint64(0); buf.uint32(0)
+            buf.uint32(len(msg_bytes) + 1)
+            buf.raw(msg_bytes + b"\x00")
+            buf.uint8(0)
+            self._send(SMSG_MESSAGECHAT, buf.bytes())
 
     # ------------------------------------------------------------------
     # Dispatch

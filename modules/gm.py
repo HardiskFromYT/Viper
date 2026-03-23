@@ -13,6 +13,48 @@ from modules.core_world import teleport_player
 
 log = logging.getLogger("gm")
 
+
+_SYS_MSG_MAX = 200   # WoW 1.12 silently drops chat packets > ~255 chars
+
+
+def _send_sys_line(session, line: str):
+    """Send a single short system-chat line. Internal — do not call directly.
+    1.12 SYSTEM layout differs from SAY: only one GUID, then msgLen directly.
+      type(u8) + lang(u32) + guid(u64) + msgLen(u32) + msg + NUL + tag(u8)
+    Any extra bytes before msgLen shift the msgLen field to a zero, so the
+    client reads msgLen=0 and displays nothing.
+    """
+    line = line[:_SYS_MSG_MAX]
+    msg_bytes = line.encode("utf-8")
+    buf = ByteBuffer()
+    buf.uint8(10)                          # CHAT_MSG_SYSTEM
+    buf.uint32(0)                          # LANG_UNIVERSAL
+    buf.uint64(0)                          # sender GUID = 0 (system message)
+    buf.uint32(len(msg_bytes) + 1)         # msgLen (includes NUL)
+    buf.raw(msg_bytes + b"\x00")           # message + NUL
+    buf.uint8(0)                           # chat tag
+    data = buf.bytes()
+    log.debug(f"sys_line ({len(data)}B): {data.hex()}")
+    session._send(SMSG_MESSAGECHAT, data)
+
+
+def send_sys_msg(session, msg: str):
+    """Send a CHAT_MSG_SYSTEM message, splitting on newlines so each packet
+    stays well under the 255-char client limit.
+    Vanilla 1.12 SYSTEM layout (differs from SAY — only one GUID, no second GUID):
+      type(u8) + lang(u32) + guid(u64) + msglen(u32) + msg + NUL + tag(u8)
+    """
+    for line in msg.split("\n"):
+        line = line.rstrip()
+        if not line:
+            continue
+        # If a single line is still too long, chunk it
+        while len(line.encode("utf-8")) > _SYS_MSG_MAX:
+            _send_sys_line(session, line[:_SYS_MSG_MAX])
+            line = line[_SYS_MSG_MAX:]
+        if line:
+            _send_sys_line(session, line)
+
 # Named teleport locations: name -> (map_id, x, y, z)
 _NAMED_LOCATIONS = {
     # Alliance cities
@@ -154,10 +196,12 @@ class Module(BaseModule):
                     f"Unknown command '.{cmd}'. Type .help for a list."
                 )
         else:
-            # Normal chat — broadcast back as SAY to self (simple echo)
-            # A full impl would broadcast to nearby players; for now just echo
+            # Normal chat — broadcast to all online players
             if session.char:
+                log.info(f"SAY from {session.char['name']} (guid={session.char['id']}): '{msg}'")
                 _broadcast_say(session, msg, msg_type)
+            else:
+                log.warning(f"Chat from {session.account} but session.char is None")
 
     # ── GM command implementations ────────────────────────────────────
 
@@ -264,8 +308,8 @@ class Module(BaseModule):
         buf = ByteBuffer()
         buf.uint8(CHAT_MSG_SYSTEM)
         buf.uint32(0)                     # language
-        buf.uint64(0)                     # sender guid (system)
-        buf.uint32(0)                     # unk (required by 1.12 client)
+        buf.uint64(0)                     # GUID1 = 0 (no sender)
+        buf.uint64(0)                     # GUID2 = 0 (no sender)
         buf.uint32(len(msg_bytes) + 1)   # message length
         buf.raw(msg_bytes + b"\x00")     # message + null
         buf.uint8(0)                      # chat tag
@@ -335,19 +379,24 @@ class Module(BaseModule):
 
 def _broadcast_say(session, msg: str, msg_type: int):
     """Broadcast player chat to all online players.
-    Vanilla 1.12 SMSG_MESSAGECHAT: type(u8) + lang(u32) + senderGUID(u64) +
-      unk(u32) + msglen(u32) + msg(null-term) + tag(u8)
+    Vanilla 1.12 SMSG_MESSAGECHAT true layout (verified from client name-query behaviour):
+      type(u8) + lang(u32) + GUID1(u64) + GUID2(u64) + msglen(u32) + msg + tag(u8)
+    The client issues CMSG_NAME_QUERY on GUID2 to resolve the display name.
+    For SAY/YELL/EMOTE both GUIDs must be the sender's GUID.
     """
     guid = session.char["id"] if session.char else 0
     msg_bytes = msg.encode("utf-8")
     buf = ByteBuffer()
     buf.uint8(msg_type & 0xFF)        # chat type
     buf.uint32(0)                     # language (LANG_UNIVERSAL)
-    buf.uint64(guid)                  # sender guid
-    buf.uint32(0)                     # unk (required by 1.12 client)
+    buf.uint64(guid)                  # GUID1 – sender (context / target)
+    buf.uint64(guid)                  # GUID2 – sender again; client name-queries THIS
     buf.uint32(len(msg_bytes) + 1)   # message length (including null)
     buf.raw(msg_bytes + b"\x00")     # message + null terminator
     buf.uint8(0)                      # chat tag
     data = buf.bytes()
-    for s in session.server.get_online_players():
+    sessions = session.server.get_online_players()
+    log.info(f"SMSG_MESSAGECHAT type={msg_type} guid={guid} msg='{msg}' "
+             f"payload_hex={data.hex()} sessions={len(sessions)}")
+    for s in sessions:
         s._send(SMSG_MESSAGECHAT, data)

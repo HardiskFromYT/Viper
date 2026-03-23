@@ -471,6 +471,7 @@ class Module(BaseModule):
         if len(payload) < 8:
             return
         guid = struct.unpack_from("<Q", payload, 0)[0]
+        log.info(f"NAME_QUERY for guid={guid}")
         # Check if it's one of our online players
         char = None
         for s in self._server.get_online_players():
@@ -480,6 +481,7 @@ class Module(BaseModule):
         if not char:
             char = get_character_by_guid(session.db_path, guid)
         if not char:
+            log.warning(f"NAME_QUERY: no char found for guid={guid}")
             return
         buf = ByteBuffer()
         buf.uint64(guid)
@@ -488,7 +490,11 @@ class Module(BaseModule):
         buf.uint32(char["race"])
         buf.uint32(char["gender"])
         buf.uint32(char["class"])
-        session._send(SMSG_NAME_QUERY_RESPONSE, buf.bytes())
+        data = buf.bytes()
+        log.info(f"NAME_QUERY_RESPONSE guid={guid} name='{char['name']}' "
+                 f"race={char['race']} gender={char['gender']} class={char['class']} "
+                 f"payload_hex={data.hex()}")
+        session._send(SMSG_NAME_QUERY_RESPONSE, data)
 
     def _worldport_ack(self, session, payload: bytes):
         """Handle MSG_MOVE_WORLDPORT_ACK — client finished loading after cross-map teleport.
