@@ -60,10 +60,12 @@ PLAYER_BYTES               = 0x00C1
 PLAYER_BYTES_2             = 0x00C2
 PLAYER_BYTES_3             = 0x00C3
 # Visible item fields — one entry per equipment slot (0=head … 18=tabard)
-# PLAYER_VISIBLE_ITEM_<n>_0  holds the item entry ID the client renders
-# Base field for slot 0 (head) is 0x00CB; stride between slots is 12
-PLAYER_VISIBLE_ITEM_1_0    = 0x00CB
-_VISIBLE_ITEM_STRIDE       = 12
+# PLAYER_VISIBLE_ITEM_<n>_0 holds the item display-info ID the client renders.
+# Each slot block is 16 DWORDs wide (MAX_VISIBLE_ITEM_OFFSET = 16 in 1.12.1):
+#   +0,+1 = creator GUID   +2 = item display ID   +3..+9 = enchants
+#   +10 = properties        +11 = pad              +12..+15 = unused padding
+PLAYER_VISIBLE_ITEM_1_0    = 0x00CB   # field for slot 0 (head)
+_VISIBLE_ITEM_STRIDE       = 16       # MAX_VISIBLE_ITEM_OFFSET for vanilla 1.12.1
 PLAYER_END                 = 0x0502
 
 # ── Starter gear per race/class ──────────────────────────────────────────────
@@ -258,12 +260,15 @@ def _build_update_object(char) -> bytes:
         PLAYER_BYTES_3:             gender,         # gender byte
     }
 
-    # Visible equipment — set PLAYER_VISIBLE_ITEM_<n>_0 to item entry for each slot
-    # so the client renders the correct gear model instead of showing naked.
+    # Visible equipment — set PLAYER_VISIBLE_ITEM_<n>_0 to the item's display ID
+    # (same value sent in CHAR_ENUM) so the client renders gear without needing
+    # a separate item-cache query.  Stride is 16 fields per slot in 1.12.1.
     gear = _STARTER_GEAR.get((race, cls)) or [(38, 3), (39, 6), (40, 7), (25, 15)]
     for item_id, equip_slot in gear:
         if 0 <= equip_slot <= 18:
-            fields[PLAYER_VISIBLE_ITEM_1_0 + equip_slot * _VISIBLE_ITEM_STRIDE] = item_id
+            display_id, _inv_type = _get_item_display(item_id)
+            if display_id:
+                fields[PLAYER_VISIBLE_ITEM_1_0 + equip_slot * _VISIBLE_ITEM_STRIDE] = display_id
 
     # Movement block
     mv = ByteBuffer()
