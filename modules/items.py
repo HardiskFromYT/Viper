@@ -115,16 +115,15 @@ class Module(BaseModule):
             count   = int(args[2]) if len(args) > 2 else 1
         except ValueError:
             return "item_id and count must be numbers."
-        it = get_item(item_id)
-        if not it:
+        item_name = _resolve_item_name(item_id)
+        if not item_name:
             return f"Item {item_id} not found in templates."
         from database import add_inventory_item
-        from server import Server  # avoid circular at module level
         char = get_character_by_name(_get_db(), char_name)
         if not char:
             return f"Character '{char_name}' not found."
         add_inventory_item(_get_db(), char["id"], item_id, count)
-        return f"Added {count}x [{it['name']}] to {char['name']}."
+        return f"Added {count}x [{item_name}] to {char['name']}."
 
     def _cli_inv(self, args):
         if not args:
@@ -140,8 +139,7 @@ class Module(BaseModule):
         lines.append(f"  {'Item ID':<10} {'Name':<35} Count")
         lines.append("  " + "-" * 55)
         for row in inv:
-            it = get_item(row["item_id"])
-            name = it["name"] if it else f"Unknown({row['item_id']})"
+            name = _resolve_item_name(row["item_id"]) or f"Unknown({row['item_id']})"
             lines.append(f"  {row['item_id']:<10} {name:<35} {row['count']}")
         return "\n".join(lines)
 
@@ -162,16 +160,38 @@ class Module(BaseModule):
         except ValueError:
             session.send_sys_msg("Arguments must be numbers.")
             return
-        it = get_item(item_id)
-        if not it:
+        # Try world.db first (14k items), fall back to local items.json
+        item_name = None
+        try:
+            from modules.world_data import get_item_template
+            tpl = get_item_template(item_id)
+            if tpl:
+                item_name = tpl["name"]
+        except Exception:
+            pass
+        if item_name is None:
+            it = get_item(item_id)
+            if it:
+                item_name = it["name"]
+        if item_name is None:
             session.send_sys_msg(f"Unknown item id {item_id}.")
             return
         if not session.char:
             session.send_sys_msg("Not in world.")
             return
-        from database import add_inventory_item
-        add_inventory_item(session.db_path, session.char["id"], item_id, count)
-        session.send_sys_msg(f"Added {count}x [{it['name']}] to inventory.")
+        from database import add_inventory_item, get_inventory
+        row_id = add_inventory_item(session.db_path, session.char["id"], item_id, count)
+        session.send_sys_msg(f"Added {count}x [{item_name}] to inventory.")
+
+        # Send the item to the client immediately so it appears in the bag
+        try:
+            from modules.core_world import _build_inventory_objects
+            pack_fields, items_pkt = _build_inventory_objects(session.char, session.db_path)
+            if items_pkt:
+                from opcodes import SMSG_UPDATE_OBJECT
+                session._send(SMSG_UPDATE_OBJECT, items_pkt)
+        except Exception as e:
+            log.debug(f"Could not send live item update: {e}")
 
     def _gm_delitem(self, session, args):
         if not args:
@@ -203,8 +223,7 @@ class Module(BaseModule):
             return
         lines = ["Your inventory:"]
         for row in inv:
-            it = get_item(row["item_id"])
-            name = it["name"] if it else f"Item#{row['item_id']}"
+            name = _resolve_item_name(row["item_id"]) or f"Item#{row['item_id']}"
             lines.append(f"  [{row['item_id']}] {name} x{row['count']}")
         session.send_sys_msg("\n".join(lines))
 
@@ -212,3 +231,16 @@ class Module(BaseModule):
 def _get_db():
     import config
     return config.DB_PATH
+
+
+def _resolve_item_name(item_id: int) -> str | None:
+    """Look up item name from world.db first, then items.json."""
+    try:
+        from modules.world_data import get_item_template
+        tpl = get_item_template(item_id)
+        if tpl:
+            return tpl["name"]
+    except Exception:
+        pass
+    it = get_item(item_id)
+    return it["name"] if it else None

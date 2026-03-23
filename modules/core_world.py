@@ -11,6 +11,7 @@ from opcodes import (CMSG_CHAR_ENUM, SMSG_CHAR_ENUM,
                      SMSG_TUTORIAL_FLAGS, SMSG_INITIAL_SPELLS,
                      SMSG_ACTION_BUTTONS, SMSG_FACTION_LIST,
                      SMSG_LOGIN_SETTIMESPEED, SMSG_UPDATE_OBJECT, SMSG_MOTD,
+                     SMSG_ITEM_QUERY_SINGLE_RESPONSE,
                      CMSG_PING, SMSG_PONG,
                      CMSG_NAME_QUERY, SMSG_NAME_QUERY_RESPONSE,
                      SMSG_NEW_WORLD, SMSG_TRANSFER_PENDING,
@@ -60,12 +61,15 @@ PLAYER_BYTES               = 0x00C1
 PLAYER_BYTES_2             = 0x00C2
 PLAYER_BYTES_3             = 0x00C3
 # Visible item fields — one entry per equipment slot (0=head … 18=tabard)
-# PLAYER_VISIBLE_ITEM_<n>_0 holds the item display-info ID the client renders.
-# Each slot block is 16 DWORDs wide (MAX_VISIBLE_ITEM_OFFSET = 16 in 1.12.1):
-#   +0,+1 = creator GUID   +2 = item display ID   +3..+9 = enchants
-#   +10 = properties        +11 = pad              +12..+15 = unused padding
-PLAYER_VISIBLE_ITEM_1_0    = 0x00CB   # field for slot 0 (head)
-_VISIBLE_ITEM_STRIDE       = 16       # MAX_VISIBLE_ITEM_OFFSET for vanilla 1.12.1
+# Vanilla 1.12.1 (build 5875) layout from MaNGOS Zero UpdateFields.h:
+#   OBJECT_END = 0x06, UNIT_END = 0xBC, quest log = 60 fields (0xC6..0x101)
+#   Per slot (stride 12): creator GUID (2) + item data (8) + properties (1) + pad (1)
+#   PLAYER_VISIBLE_ITEM_1_0 takes the **item entry ID** (client looks up display
+#   from its own DBC cache; if missing it sends CMSG_ITEM_QUERY_SINGLE).
+PLAYER_VISIBLE_ITEM_1_0    = 0x0104   # item-entry field for equipment slot 0 (head)
+_VISIBLE_ITEM_STRIDE       = 12       # fields per visible-item slot (build 5875)
+PLAYER_FIELD_INV_SLOT_HEAD = 0x01E6   # 23 equipment slot GUIDs (46 fields)
+PLAYER_FIELD_PACK_SLOT_1   = 0x0214   # 16 backpack slot GUIDs (32 fields)
 PLAYER_END                 = 0x0502
 
 # ── Starter gear per race/class ──────────────────────────────────────────────
@@ -229,7 +233,7 @@ def _char_enum_packet(chars, db_path=None) -> bytes:
     return buf.bytes()
 
 
-def _build_update_object(char) -> bytes:
+def _build_update_object(char, extra_fields=None) -> bytes:
     guid = char["id"]
     race, cls, gender = char["race"], char["class"], char["gender"]
     display = RACE_DISPLAY.get(race, (49, 50))[gender & 1]
@@ -260,15 +264,17 @@ def _build_update_object(char) -> bytes:
         PLAYER_BYTES_3:             gender,         # gender byte
     }
 
-    # Visible equipment — set PLAYER_VISIBLE_ITEM_<n>_0 to the item's display ID
-    # (same value sent in CHAR_ENUM) so the client renders gear without needing
-    # a separate item-cache query.  Stride is 16 fields per slot in 1.12.1.
+    # Visible equipment — set PLAYER_VISIBLE_ITEM_<n>_0 to the item's **entry ID**.
+    # The client looks up the display model from its DBC cache; if unknown it
+    # sends CMSG_ITEM_QUERY_SINGLE which movement.py handles.
     gear = _STARTER_GEAR.get((race, cls)) or [(38, 3), (39, 6), (40, 7), (25, 15)]
     for item_id, equip_slot in gear:
         if 0 <= equip_slot <= 18:
-            display_id, _inv_type = _get_item_display(item_id)
-            if display_id:
-                fields[PLAYER_VISIBLE_ITEM_1_0 + equip_slot * _VISIBLE_ITEM_STRIDE] = display_id
+            fields[PLAYER_VISIBLE_ITEM_1_0 + equip_slot * _VISIBLE_ITEM_STRIDE] = item_id
+
+    # Merge caller-supplied fields (e.g. pack slot GUIDs for inventory)
+    if extra_fields:
+        fields.update(extra_fields)
 
     # Movement block
     mv = ByteBuffer()
@@ -313,6 +319,204 @@ def _build_update_object(char) -> bytes:
     return pkt.bytes()
 
 
+def _presend_item_cache(session, char):
+    """Proactively send SMSG_ITEM_QUERY_SINGLE_RESPONSE for all visible
+    equipment items.  This populates (or replaces) the client's WDB cache
+    so it can render gear immediately without needing to query."""
+    race, cls = char["race"], char["class"]
+    gear = _STARTER_GEAR.get((race, cls)) or [(38, 3), (39, 6), (40, 7), (25, 15)]
+
+    # Also include inventory items
+    try:
+        inv = get_inventory(session.db_path, char["id"])
+        inv_ids = {row["item_id"] for row in inv} if inv else set()
+    except Exception:
+        inv_ids = set()
+
+    all_ids = {item_id for item_id, _ in gear if item_id} | inv_ids
+    sent = 0
+    for item_id in all_ids:
+        try:
+            from modules.world_data import get_item_template
+            tpl = get_item_template(item_id)
+            if not tpl:
+                continue
+            tpl = dict(tpl)
+            pkt = _build_item_query_response(item_id, tpl)
+            if pkt:
+                session._send(SMSG_ITEM_QUERY_SINGLE_RESPONSE, pkt)
+                sent += 1
+        except Exception:
+            pass
+    if sent:
+        log.debug(f"Pre-sent {sent} item cache entries for {char['name']}")
+
+
+def _build_item_query_response(item_id, tpl):
+    """Build an SMSG_ITEM_QUERY_SINGLE_RESPONSE payload from an item template dict."""
+    buf = ByteBuffer()
+    buf.uint32(item_id)
+    buf.uint32(int(tpl.get("class") or 0))
+    buf.uint32(int(tpl.get("subclass") or 0))
+    buf.cstring(str(tpl.get("name") or "Item"))
+    buf.uint8(0); buf.uint8(0); buf.uint8(0)  # names 2-4
+    buf.uint32(int(tpl.get("displayid") or 0))
+    buf.uint32(int(tpl.get("Quality") or 0))
+    buf.uint32(int(tpl.get("Flags") or 0))
+    buf.uint32(int(tpl.get("BuyPrice") or 0))
+    buf.uint32(int(tpl.get("SellPrice") or 0))
+    buf.uint32(int(tpl.get("InventoryType") or 0))
+    buf.uint32(int(tpl.get("AllowableClass") or -1) & 0xFFFFFFFF)
+    buf.uint32(int(tpl.get("AllowableRace") or -1) & 0xFFFFFFFF)
+    buf.uint32(int(tpl.get("ItemLevel") or 1))
+    buf.uint32(int(tpl.get("RequiredLevel") or 0))
+    buf.uint32(int(tpl.get("RequiredSkill") or 0))
+    buf.uint32(int(tpl.get("RequiredSkillRank") or 0))
+    buf.uint32(int(tpl.get("requiredspell") or 0))
+    buf.uint32(int(tpl.get("requiredhonorrank") or 0))
+    buf.uint32(0)  # required_city_rank
+    buf.uint32(int(tpl.get("RequiredReputationFaction") or 0))
+    buf.uint32(int(tpl.get("RequiredReputationRank") or 0))
+    buf.uint32(int(tpl.get("maxcount") or 0))
+    buf.uint32(int(tpl.get("stackable") or 1))
+    buf.uint32(int(tpl.get("ContainerSlots") or 0))
+    for i in range(1, 11):
+        buf.uint32(int(tpl.get(f"stat_type{i}") or 0))
+        buf.uint32(int(tpl.get(f"stat_value{i}") or 0) & 0xFFFFFFFF)
+    for i in range(1, 6):
+        buf.float32(float(tpl.get(f"dmg_min{i}") or 0))
+        buf.float32(float(tpl.get(f"dmg_max{i}") or 0))
+        buf.uint32(int(tpl.get(f"dmg_type{i}") or 0))
+    for key in ("armor", "holy_res", "fire_res", "nature_res",
+                "frost_res", "shadow_res", "arcane_res"):
+        buf.uint32(int(tpl.get(key) or 0) & 0xFFFFFFFF)
+    buf.uint32(int(tpl.get("delay") or 0))
+    buf.uint32(int(tpl.get("ammo_type") or 0))
+    buf.float32(float(tpl.get("RangedModRange") or 0))
+    for i in range(1, 6):
+        buf.uint32(int(tpl.get(f"spellid_{i}") or 0))
+        buf.uint32(int(tpl.get(f"spelltrigger_{i}") or 0))
+        buf.uint32(int(tpl.get(f"spellcharges_{i}") or 0) & 0xFFFFFFFF)
+        buf.uint32(int(tpl.get(f"spellcooldown_{i}") or 0) & 0xFFFFFFFF)
+        buf.uint32(int(tpl.get(f"spellcategory_{i}") or 0))
+        buf.uint32(int(tpl.get(f"spellcategorycooldown_{i}") or 0) & 0xFFFFFFFF)
+    buf.uint32(int(tpl.get("bonding") or 0))
+    buf.cstring(str(tpl.get("description") or ""))
+    buf.uint32(int(tpl.get("PageText") or 0))
+    buf.uint32(int(tpl.get("LanguageID") or 0))
+    buf.uint32(int(tpl.get("PageMaterial") or 0))
+    buf.uint32(int(tpl.get("startquest") or 0))
+    buf.uint32(int(tpl.get("lockid") or 0))
+    buf.uint32(int(tpl.get("Material") or 0))
+    buf.uint32(int(tpl.get("sheath") or 0))
+    buf.uint32(int(tpl.get("RandomProperty") or 0))
+    buf.uint32(int(tpl.get("block") or 0))
+    buf.uint32(int(tpl.get("itemset") or 0))
+    buf.uint32(int(tpl.get("MaxDurability") or 0))
+    buf.uint32(int(tpl.get("area") or 0))
+    buf.uint32(int(tpl.get("Map") or 0))
+    buf.uint32(int(tpl.get("BagFamily") or 0))
+    return buf.bytes()
+
+
+# ── Inventory item objects ────────────────────────────────────────────────────
+
+# Item GUIDs: use a range that won't collide with characters or creatures
+_ITEM_GUID_BASE = 0x200000000
+
+# Item update-field offsets (from UpdateFields.h, OBJECT_END = 0x06)
+_ITEM_FIELD_OWNER          = 0x06   # Size:2 (GUID)
+_ITEM_FIELD_CONTAINED      = 0x08   # Size:2 (GUID)
+_ITEM_FIELD_STACK_COUNT    = 0x0E   # Size:1
+_ITEM_FIELD_DURABILITY     = 0x2E   # Size:1
+_ITEM_FIELD_MAXDURABILITY  = 0x2F   # Size:1
+OBJECT_FIELD_ENTRY         = 0x03   # Size:1
+
+
+def _build_inventory_objects(char, db_path):
+    """Build pack-slot fields (for the player object) and a CREATE_OBJECT packet
+    containing all the character's inventory items (backpack slots 0-15).
+
+    Returns (pack_slot_fields: dict, items_packet: bytes|None).
+    """
+    inv = get_inventory(db_path, char["id"])
+    if not inv:
+        return {}, None
+
+    player_guid = char["id"]
+    pack_fields = {}
+    item_objects = []
+
+    def _f2i(f):
+        return struct.unpack("<I", struct.pack("<f", f))[0]
+
+    for slot_idx, row in enumerate(inv[:16]):  # backpack = 16 slots
+        item_guid = _ITEM_GUID_BASE + row["id"]
+
+        # Tell the player object which GUID sits in each pack slot
+        pack_fields[PLAYER_FIELD_PACK_SLOT_1 + slot_idx * 2] = item_guid & 0xFFFFFFFF
+        pack_fields[PLAYER_FIELD_PACK_SLOT_1 + slot_idx * 2 + 1] = (item_guid >> 32) & 0xFFFFFFFF
+
+        # Item object fields
+        fields = {
+            OBJECT_FIELD_GUID:         item_guid & 0xFFFFFFFF,
+            OBJECT_FIELD_GUID + 1:     (item_guid >> 32) & 0xFFFFFFFF,
+            OBJECT_FIELD_TYPE:         0x03,         # TYPEMASK_OBJECT | TYPEMASK_ITEM
+            OBJECT_FIELD_ENTRY:        row["item_id"],
+            OBJECT_FIELD_SCALE_X:      _f2i(1.0),
+            _ITEM_FIELD_OWNER:         player_guid & 0xFFFFFFFF,
+            _ITEM_FIELD_OWNER + 1:     (player_guid >> 32) & 0xFFFFFFFF,
+            _ITEM_FIELD_CONTAINED:     player_guid & 0xFFFFFFFF,
+            _ITEM_FIELD_CONTAINED + 1: (player_guid >> 32) & 0xFFFFFFFF,
+            _ITEM_FIELD_STACK_COUNT:   row["count"],
+        }
+
+        # Look up max durability from world.db and set both fields
+        try:
+            from modules.world_data import get_item_template
+            tpl = get_item_template(row["item_id"])
+            if tpl and int(tpl["MaxDurability"] or 0):
+                dur = int(tpl["MaxDurability"])
+                fields[_ITEM_FIELD_DURABILITY] = dur
+                fields[_ITEM_FIELD_MAXDURABILITY] = dur
+        except Exception:
+            pass
+
+        max_field = max(fields.keys()) + 1
+        num_blocks = (max_field + 31) // 32
+        mask_words = [0] * num_blocks
+        field_data = bytearray()
+        for idx in sorted(fields):
+            mask_words[idx // 32] |= 1 << (idx % 32)
+        for idx in sorted(fields):
+            field_data += struct.pack("<I", int(fields[idx]) & 0xFFFFFFFF)
+
+        obj = ByteBuffer()
+        obj.raw(pack_guid(item_guid))
+        obj.uint8(1)       # object type: ITEM
+        obj.uint8(0x10)    # update flags: UPDATEFLAG_ALL
+        obj.uint32(0)      # high GUID data
+        obj.uint8(num_blocks)
+        for w in mask_words:
+            obj.uint32(w)
+        obj.raw(field_data)
+        item_objects.append(obj.bytes())
+
+    if not item_objects:
+        return {}, None
+
+    pkt = ByteBuffer()
+    pkt.uint32(len(item_objects))
+    pkt.uint8(0)   # has_transport
+    for obj_bytes in item_objects:
+        pkt.uint8(2)   # UPDATE_TYPE: CREATE_OBJECT
+        pkt.raw(obj_bytes)
+
+    return pack_fields, pkt.bytes()
+
+
+# ── Login sequence ────────────────────────────────────────────────────────────
+
 def _send_login_packets(session, char):
     """Send the full login packet sequence — used for initial login."""
     _send_world_init_packets(session, char, is_login=True)
@@ -353,8 +557,28 @@ def _send_world_init_packets(session, char, is_login=False):
     b = ByteBuffer(); b.uint32(packed); b.float32(0.01666667)
     session._send(SMSG_LOGIN_SETTIMESPEED, b.bytes())
 
-    # Player create object (re-creates self on the new map)
-    session._send(SMSG_UPDATE_OBJECT, _build_update_object(char))
+    # Build inventory items and pack-slot fields for the player object
+    pack_fields = {}
+    items_pkt = None
+    try:
+        pack_fields, items_pkt = _build_inventory_objects(char, session.db_path)
+    except Exception as e:
+        log.warning(f"Failed to build inventory for {char.get('name', '?')}: {e}")
+
+    # Pre-send item cache data for all visible equipment so the client
+    # doesn't need to query (avoids stale WDB cache issues).
+    _presend_item_cache(session, char)
+
+    # Player create object (with pack-slot GUIDs if inventory exists)
+    session._send(SMSG_UPDATE_OBJECT, _build_update_object(char, extra_fields=pack_fields))
+
+    # Send inventory item objects so they appear in the backpack
+    if items_pkt:
+        try:
+            session._send(SMSG_UPDATE_OBJECT, items_pkt)
+            log.debug(f"Sent {len(pack_fields)//2} inventory items for {char['name']}")
+        except Exception as e:
+            log.warning(f"Failed to send inventory items: {e}")
 
     if is_login:
         b = ByteBuffer(); b.uint32(1); b.cstring("Welcome to TestEmu!")

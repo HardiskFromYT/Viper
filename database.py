@@ -365,7 +365,8 @@ def get_inventory(db_path: str, char_id: int):
     return rows
 
 
-def add_inventory_item(db_path: str, char_id: int, item_id: int, count: int = 1):
+def add_inventory_item(db_path: str, char_id: int, item_id: int, count: int = 1) -> int:
+    """Add or stack an item. Returns the inventory row id."""
     conn = _conn(db_path)
     existing = conn.execute(
         "SELECT id, count FROM inventory WHERE char_id=? AND item_id=?",
@@ -374,11 +375,14 @@ def add_inventory_item(db_path: str, char_id: int, item_id: int, count: int = 1)
     if existing:
         conn.execute("UPDATE inventory SET count=? WHERE id=?",
                      (existing["count"] + count, existing["id"]))
+        row_id = existing["id"]
     else:
-        conn.execute("INSERT INTO inventory (char_id,item_id,count) VALUES (?,?,?)",
-                     (char_id, item_id, count))
+        cur = conn.execute("INSERT INTO inventory (char_id,item_id,count) VALUES (?,?,?)",
+                           (char_id, item_id, count))
+        row_id = cur.lastrowid
     conn.commit()
     conn.close()
+    return row_id
 
 
 def remove_inventory_item(db_path: str, char_id: int, item_id: int) -> bool:

@@ -151,3 +151,11 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 Client/
+
+# WoW extracted data files (DBC, maps, vmaps, mmaps)
+dbc/
+maps/
+vmaps/
+mmaps/
+*.dbc
+*.wdb

@@ -247,6 +247,9 @@ class Module(BaseModule):
                           struct.pack("<I", item_id | 0x80000000))
             return
 
+        # sqlite3.Row doesn't support .get() — convert to dict
+        tpl = dict(tpl)
+
         # Build the massive item query response
         buf = ByteBuffer()
         buf.uint32(item_id)
