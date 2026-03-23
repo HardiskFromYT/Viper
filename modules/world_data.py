@@ -17,7 +17,7 @@ import struct
 import time
 
 from modules.base import BaseModule
-from opcodes import SMSG_UPDATE_OBJECT, SMSG_MOTD
+from opcodes import SMSG_UPDATE_OBJECT, SMSG_MOTD, MSG_MOVE_WORLDPORT_ACK, MSG_MOVE_TELEPORT_ACK
 from packets import ByteBuffer, pack_guid
 
 log = logging.getLogger("world_data")
@@ -363,6 +363,11 @@ class Module(BaseModule):
         from opcodes import CMSG_PLAYER_LOGIN
         self.reg_packet(server, CMSG_PLAYER_LOGIN, self._on_player_login_hook)
 
+        # Also re-send nearby creatures after every teleport so NPCs appear
+        # immediately without requiring a relog.
+        self.reg_packet(server, MSG_MOVE_WORLDPORT_ACK,  self._on_teleport_hook)
+        self.reg_packet(server, MSG_MOVE_TELEPORT_ACK,   self._on_teleport_hook)
+
         log.info("world_data module loaded.")
 
     def on_unload(self, server):
@@ -400,6 +405,28 @@ class Module(BaseModule):
             session._send(SMSG_MOTD, buf.bytes())
         except Exception:
             pass
+
+    def _on_teleport_hook(self, session, _payload: bytes):
+        """Re-send nearby creatures after any teleport (same-map or cross-map).
+        By the time either MSG_MOVE_TELEPORT_ACK or MSG_MOVE_WORLDPORT_ACK
+        reaches us, core_world has already updated session.char with the new
+        map/position, so we just query creatures for that location.
+        """
+        if not session.char:
+            return
+        char   = session.char
+        map_id = char["map"]
+        x, y   = float(char["pos_x"]), float(char["pos_y"])
+        try:
+            spawns = get_creatures_near(map_id, x, y, radius=150.0)
+            if spawns:
+                pkt = build_creatures_packet(spawns)
+                if pkt:
+                    session._send(SMSG_UPDATE_OBJECT, pkt)
+                    log.debug(f"Post-teleport: sent {len(spawns)} creatures to "
+                              f"{char['name']} at map={map_id} ({x:.0f},{y:.0f})")
+        except Exception as e:
+            log.error(f"Error sending creatures after teleport: {e}")
 
     # ── CLI ───────────────────────────────────────────────────────────
 
