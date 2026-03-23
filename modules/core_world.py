@@ -59,6 +59,11 @@ UNIT_FIELD_NATIVEDISPLAYID = 0x0084
 PLAYER_BYTES               = 0x00C1
 PLAYER_BYTES_2             = 0x00C2
 PLAYER_BYTES_3             = 0x00C3
+# Visible item fields — one entry per equipment slot (0=head … 18=tabard)
+# PLAYER_VISIBLE_ITEM_<n>_0  holds the item entry ID the client renders
+# Base field for slot 0 (head) is 0x00CB; stride between slots is 12
+PLAYER_VISIBLE_ITEM_1_0    = 0x00CB
+_VISIBLE_ITEM_STRIDE       = 12
 PLAYER_END                 = 0x0502
 
 # ── Starter gear per race/class ──────────────────────────────────────────────
@@ -252,6 +257,13 @@ def _build_update_object(char) -> bytes:
         PLAYER_BYTES_2:             char["facial"],
         PLAYER_BYTES_3:             gender,         # gender byte
     }
+
+    # Visible equipment — set PLAYER_VISIBLE_ITEM_<n>_0 to item entry for each slot
+    # so the client renders the correct gear model instead of showing naked.
+    gear = _STARTER_GEAR.get((race, cls)) or [(38, 3), (39, 6), (40, 7), (25, 15)]
+    for item_id, equip_slot in gear:
+        if 0 <= equip_slot <= 18:
+            fields[PLAYER_VISIBLE_ITEM_1_0 + equip_slot * _VISIBLE_ITEM_STRIDE] = item_id
 
     # Movement block
     mv = ByteBuffer()
