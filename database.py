@@ -347,6 +347,13 @@ def update_char_position(db_path: str, char_id: int, map_id: int,
     conn.close()
 
 
+def update_char_zone(db_path: str, char_id: int, zone_id: int):
+    conn = _conn(db_path)
+    conn.execute("UPDATE characters SET zone=? WHERE id=?", (zone_id, char_id))
+    conn.commit()
+    conn.close()
+
+
 # ── Inventory ─────────────────────────────────────────────────────────────────
 
 def get_inventory(db_path: str, char_id: int):

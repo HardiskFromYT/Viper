@@ -5,7 +5,7 @@ import logging
 import struct
 
 from modules.base import BaseModule
-from database import update_char_position
+from database import update_char_position, update_char_zone
 from packets import ByteBuffer
 
 log = logging.getLogger("movement")
@@ -89,7 +89,7 @@ class Module(BaseModule):
 
         # Selection / zone / active mover
         self.reg_packet(server, _CMSG_SET_SELECTION,    self._on_set_selection)
-        self.reg_packet(server, _CMSG_ZONEUPDATE,       self._on_ignore)
+        self.reg_packet(server, _CMSG_ZONEUPDATE,       self._on_zone_update)
         self.reg_packet(server, _CMSG_SET_ACTIVE_MOVER, self._on_ignore)
 
         # Creature / gameobject / item queries
@@ -154,6 +154,23 @@ class Module(BaseModule):
         # Send SMSG_LOGOUT_COMPLETE (empty body)
         session._send(_SMSG_LOGOUT_COMPLETE, b"")
         log.info(f"Player {session.account} logged out.")
+
+    # ── Zone update ───────────────────────────────────────────────────
+
+    def _on_zone_update(self, session, payload: bytes):
+        """CMSG_ZONEUPDATE — client tells us which zone it entered.
+        Persist to DB so the character select screen shows the right zone.
+        """
+        if len(payload) < 4 or not session.char:
+            return
+        zone_id = struct.unpack_from("<I", payload, 0)[0]
+        session.char = dict(session.char)
+        session.char["zone"] = zone_id
+        try:
+            update_char_zone(session.db_path, session.char["id"], zone_id)
+            log.debug(f"Zone update: {session.char['name']} → zone {zone_id}")
+        except Exception as e:
+            log.warning(f"Zone save error: {e}")
 
     # ── Selection ─────────────────────────────────────────────────────
 
