@@ -313,6 +313,15 @@ def get_characters(db_path: str, account_id: int):
     return rows
 
 
+def delete_character(db_path: str, char_id: int):
+    """Delete a character and all related data (inventory, etc.)."""
+    conn = _conn(db_path)
+    conn.execute("DELETE FROM inventory WHERE char_id=?", (char_id,))
+    conn.execute("DELETE FROM characters WHERE id=?", (char_id,))
+    conn.commit()
+    conn.close()
+
+
 def get_character_by_guid(db_path: str, guid: int):
     conn = _conn(db_path)
     row = conn.execute("SELECT * FROM characters WHERE id=?", (guid,)).fetchone()

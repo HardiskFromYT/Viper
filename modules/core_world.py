@@ -6,6 +6,7 @@ import time
 from modules.base import BaseModule
 from opcodes import (CMSG_CHAR_ENUM, SMSG_CHAR_ENUM,
                      CMSG_CHAR_CREATE, SMSG_CHAR_CREATE,
+                     CMSG_CHAR_DELETE, SMSG_CHAR_DELETE,
                      CMSG_PLAYER_LOGIN,
                      SMSG_LOGIN_VERIFY_WORLD, SMSG_ACCOUNT_DATA_TIMES,
                      SMSG_TUTORIAL_FLAGS, SMSG_INITIAL_SPELLS,
@@ -18,7 +19,8 @@ from opcodes import (CMSG_CHAR_ENUM, SMSG_CHAR_ENUM,
                      MSG_MOVE_WORLDPORT_ACK, MSG_MOVE_TELEPORT_ACK)
 from packets import ByteBuffer, pack_guid, build_server_packet
 from database import (get_account, get_characters, create_character,
-                      get_character_by_guid, add_inventory_item, get_inventory,
+                      delete_character, get_character_by_guid,
+                      add_inventory_item, get_inventory,
                       update_char_position, update_char_zone)
 
 log = logging.getLogger("core_world")
@@ -651,6 +653,7 @@ class Module(BaseModule):
         self._server = server
         self.reg_packet(server, CMSG_CHAR_ENUM,        self._char_enum)
         self.reg_packet(server, CMSG_CHAR_CREATE,      self._char_create)
+        self.reg_packet(server, CMSG_CHAR_DELETE,      self._char_delete)
         self.reg_packet(server, CMSG_PLAYER_LOGIN,     self._player_login)
         self.reg_packet(server, CMSG_PING,             self._ping)
         self.reg_packet(server, CMSG_NAME_QUERY,       self._name_query)
@@ -695,6 +698,24 @@ class Module(BaseModule):
         _give_starter_gear(session.db_path, char_id, race, cls)
         log.info(f"Created char '{name}' (id={char_id}) for {session.account} with starter gear")
         session._send(SMSG_CHAR_CREATE, bytes([0x2E]))  # success
+
+    def _char_delete(self, session, payload: bytes):
+        if len(payload) < 8:
+            session._send(SMSG_CHAR_DELETE, bytes([0x39]))  # CHAR_DELETE_FAILED
+            return
+        guid = struct.unpack_from("<Q", payload, 0)[0]
+        # Verify the character belongs to this account
+        acct = get_account(session.db_path, session.account)
+        if not acct:
+            session._send(SMSG_CHAR_DELETE, bytes([0x39]))
+            return
+        char = get_character_by_guid(session.db_path, guid)
+        if not char or char["account_id"] != acct["id"]:
+            session._send(SMSG_CHAR_DELETE, bytes([0x39]))
+            return
+        delete_character(session.db_path, guid)
+        log.info(f"Deleted char '{char['name']}' (id={guid}) for {session.account}")
+        session._send(SMSG_CHAR_DELETE, bytes([0x38]))  # CHAR_DELETE_SUCCESS
 
     def _player_login(self, session, payload: bytes):
         guid = struct.unpack_from("<Q", payload, 0)[0]
