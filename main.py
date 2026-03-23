@@ -10,15 +10,27 @@ from auth_server import start_auth_server
 from world_server import start_world_server
 from cli import run_cli
 import config
+import logbuffer
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(name)-12s] %(levelname)s: %(message)s",
+# ── Logging: file + ring buffer, nothing to stdout ──────────────────────────
+_FMT = logging.Formatter(
+    "%(asctime)s [%(name)-12s] %(levelname)s: %(message)s",
     datefmt="%H:%M:%S",
 )
-# Show debug details for auth diagnostics
+
+_file_handler = logging.FileHandler("server.log", encoding="utf-8")
+_file_handler.setFormatter(_FMT)
+
+_ring_handler = logbuffer.RingHandler()
+_ring_handler.setFormatter(_FMT)
+
+logging.root.setLevel(logging.DEBUG)
+logging.root.handlers = [_file_handler, _ring_handler]
+
+# Keep DEBUG on auth/world for diagnostics — goes to file only, not terminal
 logging.getLogger("srp6").setLevel(logging.DEBUG)
 logging.getLogger("world").setLevel(logging.DEBUG)
+
 log = logging.getLogger("main")
 
 

@@ -295,6 +295,20 @@ def _register_builtin_commands(server):
             return "Usage: char <name>"
         return _player(args)  # same output
 
+    def _logs(args):
+        import logbuffer
+        n = 100
+        if args:
+            try:
+                n = int(args[0])
+            except ValueError:
+                return "Usage: logs [n]  — show last n log lines (default 100)"
+        entries = list(logbuffer.buffer)
+        tail = entries[-n:] if len(entries) >= n else entries
+        if not tail:
+            return "  No log entries yet."
+        return "\n".join(tail)
+
     def _shutdown(_args):
         import os, signal
         os.kill(os.getpid(), signal.SIGINT)
@@ -318,6 +332,7 @@ def _register_builtin_commands(server):
         ("addaccount", _addaccount, "addaccount <user> <pass>  — create account"),
         ("delaccount", _delaccount, "delaccount <user>  — delete account"),
         ("setpass",    _setpass,    "setpass <user> <pass>  — change password"),
+        ("logs",       _logs,       "logs [n]  — show last n log lines (default 100)"),
         ("shutdown",   _shutdown,   "shutdown  — stop the server"),
         ("quit",       _shutdown,   "quit  — alias for shutdown"),
     ]
