@@ -18,7 +18,7 @@ from opcodes import (CMSG_CHAR_ENUM, SMSG_CHAR_ENUM,
 from packets import ByteBuffer, pack_guid, build_server_packet
 from database import (get_account, get_characters, create_character,
                       get_character_by_guid, add_inventory_item, get_inventory,
-                      update_char_position)
+                      update_char_position, update_char_zone)
 
 log = logging.getLogger("core_world")
 
@@ -347,18 +347,23 @@ def _send_world_init_packets(session, char, is_login=False):
         log.info(f"Teleport re-init complete for {char['name']}")
 
 
-def teleport_player(session, map_id: int, x: float, y: float, z: float, o: float):
+def teleport_player(session, map_id: int, x: float, y: float, z: float, o: float,
+                    zone_id: int = 0):
     """Teleport a player. Handles same-map (near) and cross-map (far) teleports.
-    This is the function GM commands and .tele should call.
+    zone_id: if non-zero, immediately saves the destination zone so the
+    character select screen reflects it without waiting for CMSG_ZONEUPDATE.
     """
     if not session.char:
         return
 
     old_map = session.char["map"]
 
-    # Update position in memory and DB
+    # Update position (and zone if known) in memory and DB
     session.char = dict(session.char)
     session.char.update({"map": map_id, "pos_x": x, "pos_y": y, "pos_z": z, "orientation": o})
+    if zone_id:
+        session.char["zone"] = zone_id
+        update_char_zone(session.db_path, session.char["id"], zone_id)
     update_char_position(session.db_path, session.char["id"], map_id, x, y, z, o)
 
     if map_id == old_map:

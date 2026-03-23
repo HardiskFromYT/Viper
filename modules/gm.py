@@ -55,38 +55,39 @@ def send_sys_msg(session, msg: str):
         if line:
             _send_sys_line(session, line)
 
-# Named teleport locations: name -> (map_id, x, y, z)
+# Named teleport locations: name -> (map_id, x, y, z, zone_id)
+# Zone IDs from vanilla 1.12.1 AreaTable.dbc
 _NAMED_LOCATIONS = {
     # Alliance cities
-    "stormwind":    (0, -8833.37,  628.62,   94.00),
-    "ironforge":    (0, -4981.25, -881.54,  501.76),
-    "darnassus":    (1,  9952.07, 2280.32,  1341.39),
-    "exodar":       (530, -3961.64, -13931.2, 100.61),
+    "stormwind":    (0, -8833.37,  628.62,   94.00,  1519),
+    "ironforge":    (0, -4981.25, -881.54,  501.76,  1537),
+    "darnassus":    (1,  9952.07, 2280.32,  1341.39, 1657),
+    "exodar":       (530, -3961.64, -13931.2, 100.61, 3557),
     # Horde cities
-    "orgrimmar":    (1,  1526.00, -4421.00,   6.00),
-    "undercity":    (0,  1596.01,  240.44,  -65.00),
-    "thunderbluff": (1, -1282.73, 141.56,  131.33),
-    "silvermoon":   (530, 9369.81, -7368.74,  14.23),
+    "orgrimmar":    (1,  1526.00, -4421.00,   6.00,  1637),
+    "undercity":    (0,  1596.01,  240.44,  -65.00,  1497),
+    "thunderbluff": (1, -1282.73,  141.56,  131.33,  1638),
+    "silvermoon":   (530, 9369.81, -7368.74, 14.23,  3487),
     # Shattrath
-    "shattrath":    (530, -1836.21, 5301.35, -12.43),
+    "shattrath":    (530, -1836.21, 5301.35, -12.43, 3703),
     # Neutral
-    "gadgetzan":    (1, -7178.24, -3804.52,   8.91),
-    "booty":        (0, -14353.9, 532.1,     23.0),
-    "bootybay":     (0, -14353.9, 532.1,     23.0),
-    "mudsprocket":  (1, -4425.0, -1134.0,    26.0),
+    "gadgetzan":    (1, -7178.24, -3804.52,   8.91,   440),
+    "booty":        (0, -14353.9,  532.1,     23.0,    33),
+    "bootybay":     (0, -14353.9,  532.1,     23.0,    33),
+    "mudsprocket":  (1,  -4425.0, -1134.0,    26.0,    15),
     # Instances / special
-    "gmisland":     (1, 16222.0,  16265.0,   14.0),
-    "gm":           (1, 16222.0,  16265.0,   14.0),
+    "gmisland":     (1, 16222.0,  16265.0,   14.0,   876),
+    "gm":           (1, 16222.0,  16265.0,   14.0,   876),
     # Starting zones (Alliance)
-    "northshire":   (0,  -8913.0, -117.0,   80.0),
-    "coldridge":    (0,  -6240.0,  331.0,   382.0),
-    "teldrassil":   (1,  10311.0,  832.0,  1326.0),
+    "northshire":   (0,  -8913.0,  -117.0,   80.0,    12),
+    "coldridge":    (0,  -6240.0,   331.0,  382.0,     1),
+    "teldrassil":   (1,  10311.0,   832.0, 1326.0,   141),
     # Starting zones (Horde)
-    "durotar":      (1,   -618.0, -4251.0,   38.7),
-    "tirisfal":     (0,   -284.0,  1687.0,   89.0),
-    "mulgore":      (1,  -2918.0,  -258.0,   53.0),
+    "durotar":      (1,   -618.0, -4251.0,   38.7,    14),
+    "tirisfal":     (0,   -284.0,  1687.0,   89.0,    85),
+    "mulgore":      (1,  -2918.0,  -258.0,   53.0,   215),
     # Other
-    "dalaran":      (0,   534.0,    -804.0,  96.0),
+    "dalaran":      (0,    534.0,  -804.0,   96.0,    36),
 }
 
 CHAT_MSG_SAY    = 0
@@ -236,8 +237,8 @@ class Module(BaseModule):
         # Named location?
         name = args[0].lower()
         if name in _NAMED_LOCATIONS:
-            map_id, x, y, z = _NAMED_LOCATIONS[name]
-            teleport_player(session, map_id, x, y, z, 0.0)
+            map_id, x, y, z, zone_id = _NAMED_LOCATIONS[name]
+            teleport_player(session, map_id, x, y, z, 0.0, zone_id=zone_id)
             return
         # Coordinate teleport
         if len(args) < 3:
