@@ -18,4 +18,5 @@ MODULES = [
     "movement",    # movement packet handlers — silences log spam
     "world_data",  # MaNGOS world DB: creatures, quests, NPCs, teleports, loot
     "gm",
+    "news",        # login-screen breaking-news HTTP server
 ]
