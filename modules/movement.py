@@ -32,6 +32,10 @@ _SILENT_OPCODES = [
 # How often to persist position to DB (every N heartbeats)
 _SAVE_INTERVAL = 20
 
+# Visibility: check every N movement packets, re-query if moved > threshold
+_VIS_CHECK_INTERVAL = 10
+_VIS_MOVE_THRESHOLD = 75.0   # yards
+
 # Opcodes (import here to avoid circular imports)
 _CMSG_LOGOUT_REQUEST      = 0x04B
 _CMSG_PLAYER_LOGOUT       = 0x04A
@@ -124,12 +128,36 @@ class Module(BaseModule):
         char_id = session.char["id"]
         count = self._heartbeat_count.get(char_id, 0) + 1
         self._heartbeat_count[char_id] = count
+
+        # Persist position to DB periodically
         if count % _SAVE_INTERVAL == 0:
             try:
                 update_char_position(session.db_path, char_id,
                                      session.char["map"], x, y, z, o)
             except Exception as e:
                 log.debug(f"Position save error: {e}")
+
+        # Visibility update: check if player moved far enough to re-query
+        if count % _VIS_CHECK_INTERVAL == 0:
+            self._check_visibility(session, x, y)
+
+    # ── Visibility ──────────────────────────────────────────────────────
+
+    def _check_visibility(self, session, x, y):
+        """Re-query creatures if the player moved far enough from last spawn center."""
+        center = getattr(session, "_spawn_center", None)
+        if not center:
+            return
+        _, cx, cy = center
+        dx = x - cx
+        dy = y - cy
+        if (dx * dx + dy * dy) < _VIS_MOVE_THRESHOLD * _VIS_MOVE_THRESHOLD:
+            return  # haven't moved far enough
+        try:
+            from modules.world_data import update_visibility
+            update_visibility(session)
+        except Exception as e:
+            log.debug(f"Visibility update error: {e}")
 
     # ── Logout ────────────────────────────────────────────────────────
 

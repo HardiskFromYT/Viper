@@ -332,6 +332,92 @@ def build_creatures_packet(spawns) -> bytes | None:
     return pkt.bytes()
 
 
+# ── Visibility system ─────────────────────────────────────────────────────────
+# Spawn creatures within this radius; despawn only past the larger radius.
+# The gap ensures the player never sees creatures pop in/out.
+_VIS_SPAWN_RADIUS  = 150.0
+_VIS_DESPAWN_RADIUS = 300.0
+
+SMSG_DESTROY_OBJECT = 0x00AA
+
+
+def _init_session_visibility(session):
+    """Initialise per-session visibility tracking if not already set."""
+    if not hasattr(session, "_known_creatures"):
+        session._known_creatures = set()       # creature GUIDs sent to client
+        session._known_positions = {}           # guid -> (x, y) for distance check
+        session._spawn_center = (None, 0, 0)   # (map, x, y) of last query
+
+
+def _send_destroy(session, guid: int):
+    """Send SMSG_DESTROY_OBJECT for one creature GUID."""
+    session._send(SMSG_DESTROY_OBJECT, struct.pack("<Q", guid))
+
+
+def update_visibility(session):
+    """Re-query creatures near the player; send new ones, despawn far ones.
+
+    Called periodically from the movement handler when the player has moved
+    far enough from the last spawn center.
+    """
+    if not session.char:
+        return
+    _init_session_visibility(session)
+
+    char   = session.char
+    map_id = char["map"]
+    px, py = float(char["pos_x"]), float(char["pos_y"])
+
+    # Query creatures within the spawn radius
+    try:
+        spawns = get_creatures_near(map_id, px, py, radius=_VIS_SPAWN_RADIUS)
+    except Exception as e:
+        log.error(f"Visibility query error: {e}")
+        return
+
+    near_guids = set()
+    new_spawns = []
+    for s in (spawns or []):
+        guid = s["guid"] + 0x100000000
+        near_guids.add(guid)
+        if guid not in session._known_creatures:
+            new_spawns.append(s)
+        # Always refresh position for distance checks
+        session._known_positions[guid] = (float(s["position_x"]), float(s["position_y"]))
+
+    # Send new creatures
+    if new_spawns:
+        try:
+            pkt = build_creatures_packet(new_spawns)
+            if pkt:
+                session._send(SMSG_UPDATE_OBJECT, pkt)
+        except Exception as e:
+            log.error(f"Visibility spawn error: {e}")
+
+    # Despawn creatures that are beyond the despawn radius
+    to_remove = []
+    for guid in session._known_creatures:
+        pos = session._known_positions.get(guid)
+        if not pos:
+            continue
+        dx = px - pos[0]
+        dy = py - pos[1]
+        if (dx * dx + dy * dy) > _VIS_DESPAWN_RADIUS * _VIS_DESPAWN_RADIUS:
+            to_remove.append(guid)
+
+    for guid in to_remove:
+        try:
+            _send_destroy(session, guid)
+        except Exception:
+            pass
+        session._known_creatures.discard(guid)
+        session._known_positions.pop(guid, None)
+
+    # Update known set (add new, keep existing that aren't despawned)
+    session._known_creatures |= near_guids
+    session._spawn_center = (map_id, px, py)
+
+
 # ── Module ────────────────────────────────────────────────────────────────────
 
 class Module(BaseModule):
@@ -384,13 +470,24 @@ class Module(BaseModule):
         map_id = char["map"]
         x, y   = float(char["pos_x"]), float(char["pos_y"])
 
-        # Send nearby creatures
+        # Initialise visibility tracking
+        _init_session_visibility(session)
+        session._known_creatures.clear()
+        session._known_positions.clear()
+        session._spawn_center = (map_id, x, y)
+
+        # Send nearby creatures and populate known set
         try:
-            spawns = get_creatures_near(map_id, x, y, radius=150.0)
+            spawns = get_creatures_near(map_id, x, y, radius=_VIS_SPAWN_RADIUS)
             if spawns:
                 pkt = build_creatures_packet(spawns)
                 if pkt:
                     session._send(SMSG_UPDATE_OBJECT, pkt)
+                for s in spawns:
+                    guid = s["guid"] + 0x100000000
+                    session._known_creatures.add(guid)
+                    session._known_positions[guid] = (
+                        float(s["position_x"]), float(s["position_y"]))
                     log.debug(f"Sent {len(spawns)} creatures to {char['name']}")
         except Exception as e:
             log.error(f"Error sending creatures: {e}")
@@ -407,24 +504,38 @@ class Module(BaseModule):
             pass
 
     def _on_teleport_hook(self, session, _payload: bytes):
-        """Re-send nearby creatures after any teleport (same-map or cross-map).
-        By the time either MSG_MOVE_TELEPORT_ACK or MSG_MOVE_WORLDPORT_ACK
-        reaches us, core_world has already updated session.char with the new
-        map/position, so we just query creatures for that location.
-        """
+        """Re-send nearby creatures after any teleport (same-map or cross-map)."""
         if not session.char:
             return
+        _init_session_visibility(session)
+
+        # Destroy all previously known creatures (player is in a new area)
+        for guid in list(session._known_creatures):
+            try:
+                _send_destroy(session, guid)
+            except Exception:
+                pass
+        session._known_creatures.clear()
+        session._known_positions.clear()
+
         char   = session.char
         map_id = char["map"]
         x, y   = float(char["pos_x"]), float(char["pos_y"])
+        session._spawn_center = (map_id, x, y)
+
         try:
-            spawns = get_creatures_near(map_id, x, y, radius=150.0)
+            spawns = get_creatures_near(map_id, x, y, radius=_VIS_SPAWN_RADIUS)
             if spawns:
                 pkt = build_creatures_packet(spawns)
                 if pkt:
                     session._send(SMSG_UPDATE_OBJECT, pkt)
-                    log.debug(f"Post-teleport: sent {len(spawns)} creatures to "
-                              f"{char['name']} at map={map_id} ({x:.0f},{y:.0f})")
+                for s in spawns:
+                    guid = s["guid"] + 0x100000000
+                    session._known_creatures.add(guid)
+                    session._known_positions[guid] = (
+                        float(s["position_x"]), float(s["position_y"]))
+                log.debug(f"Post-teleport: sent {len(spawns)} creatures to "
+                          f"{char['name']} at map={map_id} ({x:.0f},{y:.0f})")
         except Exception as e:
             log.error(f"Error sending creatures after teleport: {e}")
 
