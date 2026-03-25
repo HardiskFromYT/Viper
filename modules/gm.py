@@ -4,11 +4,15 @@ import logging
 import struct
 import time
 
+import re
+
 from modules.base import BaseModule
-from opcodes import (CMSG_MESSAGECHAT, SMSG_MESSAGECHAT, SMSG_UPDATE_OBJECT)
+from opcodes import (CMSG_MESSAGECHAT, SMSG_MESSAGECHAT, SMSG_UPDATE_OBJECT,
+                     SMSG_MOVE_SET_HOVER, SMSG_MOVE_UNSET_HOVER,
+                     SMSG_FORCE_RUN_SPEED_CHANGE, SMSG_FORCE_SWIM_SPEED_CHANGE)
 from packets import ByteBuffer, pack_guid
 from database import (get_character_by_name, set_gm_level, set_char_level,
-                      update_char_position)
+                      update_char_position, get_char_money, set_char_money)
 from modules.core_world import teleport_player
 
 log = logging.getLogger("gm")
@@ -95,9 +99,13 @@ CHAT_MSG_YELL   = 5
 CHAT_MSG_SYSTEM = 10
 
 # Update field constants — vanilla 1.12.1 (build 5875)
-UNIT_FIELD_HEALTH  = 0x0016
-UNIT_FIELD_MAXHEALTH = 0x001C
-UNIT_FIELD_LEVEL   = 0x0022
+UNIT_FIELD_HEALTH      = 0x0016
+UNIT_FIELD_MAXHEALTH   = 0x001C
+UNIT_FIELD_LEVEL       = 0x0022
+PLAYER_FIELD_COINAGE   = 0x00B3
+
+# Gold cap in copper: 214748g 36s 47c
+_GOLD_CAP = 2147483647
 
 
 def _build_values_update(guid: int, fields: dict) -> bytes:
@@ -162,6 +170,10 @@ class Module(BaseModule):
                     help_text=".players  — list online players", min_gm=1)
         self.reg_gm(server, "setpos",    self._cmd_setpos,
                     help_text=".setpos <char> <x> <y> <z>  — set offline char position", min_gm=2)
+        self.reg_gm(server, "fly",       self._cmd_fly,
+                    help_text=".fly <on|off>  — toggle GM flight", min_gm=1)
+        self.reg_gm(server, "gold",      self._cmd_gold,
+                    help_text=".gold <amount|cap|reset>  — add gold (e.g. 1g27s19c)", min_gm=1)
 
         log.info("gm loaded.")
 
@@ -376,6 +388,112 @@ class Module(BaseModule):
         update_char_position(session.db_path, char["id"],
                              char["map"], x, y, z, 0.0)
         session.send_sys_msg(f"Set {char['name']} position to {x:.1f},{y:.1f},{z:.1f}.")
+
+    # ── .fly on/off ──────────────────────────────────────────────────
+
+    def _cmd_fly(self, session, args):
+        if not session.char:
+            session.send_sys_msg("Not in world.")
+            return
+        if not args or args[0].lower() not in ("on", "off"):
+            session.send_sys_msg("Usage: .fly <on|off>")
+            return
+
+        guid = session.char["id"]
+        enable = args[0].lower() == "on"
+
+        if enable:
+            # Enable hover mode (swim-in-air flight for vanilla 1.12)
+            buf = ByteBuffer()
+            buf.raw(pack_guid(guid))
+            buf.uint32(0)   # move counter
+            session._send(SMSG_MOVE_SET_HOVER, buf.bytes())
+            session._fly_mode = True
+            session.send_sys_msg("Fly mode ON.")
+        else:
+            buf = ByteBuffer()
+            buf.raw(pack_guid(guid))
+            buf.uint32(0)
+            session._send(SMSG_MOVE_UNSET_HOVER, buf.bytes())
+            session._fly_mode = False
+            session.send_sys_msg("Fly mode OFF.")
+
+    # ── .gold ────────────────────────────────────────────────────────
+
+    def _cmd_gold(self, session, args):
+        if not session.char:
+            session.send_sys_msg("Not in world.")
+            return
+        if not args:
+            session.send_sys_msg("Usage: .gold <amount|cap|reset>")
+            session.send_sys_msg("  amount: e.g. 10g, 5g30s, 1g27s19c, 50s, 99c")
+            return
+
+        # Resolve target: selected player or self
+        target_session = session
+        target_guid = getattr(session, "target_guid", 0)
+        if target_guid and target_guid != session.char["id"]:
+            # Check if target is an online player
+            for s in self._server.get_online_players():
+                if s.char and s.char["id"] == target_guid:
+                    target_session = s
+                    break
+
+        if not target_session.char:
+            session.send_sys_msg("Target not in world.")
+            return
+
+        char_id = target_session.char["id"]
+        char_name = target_session.char["name"]
+        current = get_char_money(session.db_path, char_id)
+
+        sub = args[0].lower()
+        if sub == "cap":
+            new_money = _GOLD_CAP
+        elif sub == "reset":
+            new_money = 0
+        else:
+            # Parse amount like "1g27s19c", "10g", "50s", "99c"
+            amount = _parse_gold(args[0])
+            if amount is None:
+                session.send_sys_msg("Invalid amount. Examples: 10g, 5g30s, 1g27s19c, 50s, 99c")
+                return
+            new_money = min(current + amount, _GOLD_CAP)
+
+        set_char_money(session.db_path, char_id, new_money)
+
+        # Update the live session's char dict
+        target_session.char = dict(target_session.char)
+        target_session.char["money"] = new_money
+
+        # Send SMSG_UPDATE_OBJECT to update coinage on the client
+        target_session._send(
+            SMSG_UPDATE_OBJECT,
+            _build_values_update(target_session.char["id"],
+                                 {PLAYER_FIELD_COINAGE: new_money & 0xFFFFFFFF}))
+
+        g, s, c = new_money // 10000, (new_money % 10000) // 100, new_money % 100
+        if target_session is session:
+            session.send_sys_msg(f"Gold set to {g}g {s}s {c}c.")
+        else:
+            session.send_sys_msg(f"Set {char_name}'s gold to {g}g {s}s {c}c.")
+
+
+def _parse_gold(text: str) -> int | None:
+    """Parse a gold string like '1g27s19c' into copper. Returns None on failure."""
+    text = text.lower().strip()
+    # Try pattern: optional gold, optional silver, optional copper
+    m = re.fullmatch(r"(?:(\d+)g)?(?:(\d+)s)?(?:(\d+)c)?", text)
+    if not m or not any(m.groups()):
+        # Try plain number (treat as copper)
+        try:
+            return int(text)
+        except ValueError:
+            return None
+    gold = int(m.group(1) or 0)
+    silver = int(m.group(2) or 0)
+    copper = int(m.group(3) or 0)
+    return gold * 10000 + silver * 100 + copper
 
 
 def _broadcast_say(session, msg: str, msg_type: int):

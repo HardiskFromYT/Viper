@@ -74,6 +74,9 @@ MIGRATIONS = [
                                    "INTEGER NOT NULL DEFAULT 0")),
     (6, "auto-promote first account to GM 3 if no GMs exist",
      lambda conn: _auto_promote_gm(conn)),
+    (7, "add money column to characters",
+     lambda conn: _safe_add_column(conn, "characters", "money",
+                                   "INTEGER NOT NULL DEFAULT 0")),
 ]
 
 
@@ -352,6 +355,21 @@ def update_char_position(db_path: str, char_id: int, map_id: int,
         "UPDATE characters SET map=?,pos_x=?,pos_y=?,pos_z=?,orientation=? WHERE id=?",
         (map_id, x, y, z, o, char_id),
     )
+    conn.commit()
+    conn.close()
+
+
+def get_char_money(db_path: str, char_id: int) -> int:
+    conn = _conn(db_path)
+    row = conn.execute("SELECT money FROM characters WHERE id=?", (char_id,)).fetchone()
+    conn.close()
+    return int(row["money"]) if row else 0
+
+
+def set_char_money(db_path: str, char_id: int, money: int):
+    money = max(0, min(2147483647, money))
+    conn = _conn(db_path)
+    conn.execute("UPDATE characters SET money=? WHERE id=?", (money, char_id))
     conn.commit()
     conn.close()
 

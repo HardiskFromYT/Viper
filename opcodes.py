@@ -104,6 +104,11 @@ CMSG_LEAVE_CHANNEL           = 0x098
 
 # Move speed changes
 SMSG_FORCE_RUN_SPEED_CHANGE  = 0x0E2
+SMSG_FORCE_SWIM_SPEED_CHANGE = 0x0E6
+
+# Hover (used for GM fly in vanilla)
+SMSG_MOVE_SET_HOVER          = 0x0F4
+SMSG_MOVE_UNSET_HOVER        = 0x0F5
 
 # Misc
 SMSG_WARDEN_DATA             = 0x4C1
