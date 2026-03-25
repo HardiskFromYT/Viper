@@ -74,128 +74,35 @@ PLAYER_FIELD_INV_SLOT_HEAD = 0x01E6   # 23 equipment slot GUIDs (46 fields)
 PLAYER_FIELD_PACK_SLOT_1   = 0x0214   # 16 backpack slot GUIDs (32 fields)
 PLAYER_END                 = 0x0502
 
-# ── Starter gear per race/class ──────────────────────────────────────────────
-# item_id -> (displayid, inventory_type)
-# inventory_type: 4=shirt, 7=legs, 8=feet, 13=1H weapon, 17=2H weapon, 20=robe, 21=main-hand
 # For SMSG_CHAR_ENUM: equip slot order is:
 #   0=head,1=neck,2=shoulders,3=shirt,4=chest,5=waist,6=legs,7=feet,8=wrists,
 #   9=hands,10=ring1,11=ring2,12=trinket1,13=trinket2,14=back,15=mainhand,16=offhand,
 #   17=ranged,18=tabard
 
-# (race, class) -> list of (item_id, equip_slot)
-# equip_slot maps to inventory slot for display
-_STARTER_GEAR = {
-    # Human Warrior
-    (1, 1): [(38, 3), (39, 6), (40, 7), (25, 15), (6948, -1)],
-    # Human Paladin
-    (1, 2): [(45, 3), (44, 6), (43, 7), (36, 15), (6948, -1)],
-    # Human Rogue
-    (1, 4): [(2105, 3), (120, 6), (121, 7), (2092, 15), (6948, -1)],
-    # Human Priest
-    (1, 5): [(53, 3), (52, 6), (51, 7), (36, 15), (6948, -1)],
-    # Human Mage
-    (1, 8): [(56, 4), (1822, 15), (6948, -1)],
-    # Human Warlock
-    (1, 9): [(56, 4), (35, 15), (6948, -1)],
-    # Orc Warrior
-    (2, 1): [(6125, 3), (6126, 6), (6127, 7), (12282, 15), (6948, -1)],
-    # Orc Hunter
-    (2, 3): [(148, 3), (147, 6), (129, 7), (12282, 15), (6948, -1)],
-    # Orc Rogue
-    (2, 4): [(2105, 3), (120, 6), (121, 7), (2092, 15), (6948, -1)],
-    # Orc Shaman
-    (2, 7): [(154, 3), (153, 6), (36, 15), (6948, -1)],
-    # Orc Warlock
-    (2, 9): [(56, 4), (35, 15), (6948, -1)],
-    # Dwarf Warrior
-    (3, 1): [(38, 3), (39, 6), (40, 7), (12282, 15), (6948, -1)],
-    # Dwarf Paladin
-    (3, 2): [(45, 3), (44, 6), (43, 7), (36, 15), (6948, -1)],
-    # Dwarf Hunter
-    (3, 3): [(148, 3), (147, 6), (129, 7), (12282, 15), (6948, -1)],
-    # Dwarf Rogue
-    (3, 4): [(2105, 3), (120, 6), (121, 7), (2092, 15), (6948, -1)],
-    # Dwarf Priest
-    (3, 5): [(53, 3), (52, 6), (51, 7), (36, 15), (6948, -1)],
-    # Night Elf Warrior
-    (4, 1): [(38, 3), (39, 6), (40, 7), (25, 15), (6948, -1)],
-    # Night Elf Hunter
-    (4, 3): [(148, 3), (147, 6), (129, 7), (25, 15), (6948, -1)],
-    # Night Elf Rogue
-    (4, 4): [(2105, 3), (120, 6), (121, 7), (2092, 15), (6948, -1)],
-    # Night Elf Priest
-    (4, 5): [(53, 3), (52, 6), (51, 7), (36, 15), (6948, -1)],
-    # Night Elf Druid
-    (4, 11): [(56, 4), (35, 15), (6948, -1)],
-    # Undead Warrior
-    (5, 1): [(6125, 3), (6126, 6), (6127, 7), (25, 15), (6948, -1)],
-    # Undead Rogue
-    (5, 4): [(2105, 3), (120, 6), (121, 7), (2092, 15), (6948, -1)],
-    # Undead Priest
-    (5, 5): [(53, 3), (52, 6), (51, 7), (36, 15), (6948, -1)],
-    # Undead Mage
-    (5, 8): [(56, 4), (35, 15), (6948, -1)],
-    # Undead Warlock
-    (5, 9): [(56, 4), (35, 15), (6948, -1)],
-    # Tauren Warrior
-    (6, 1): [(154, 3), (153, 6), (2361, 15), (6948, -1)],
-    # Tauren Hunter
-    (6, 3): [(148, 3), (147, 6), (129, 7), (2361, 15), (6948, -1)],
-    # Tauren Shaman
-    (6, 7): [(154, 3), (153, 6), (36, 15), (6948, -1)],
-    # Tauren Druid
-    (6, 11): [(56, 4), (35, 15), (6948, -1)],
-    # Gnome Warrior
-    (7, 1): [(38, 3), (39, 6), (40, 7), (25, 15), (6948, -1)],
-    # Gnome Rogue
-    (7, 4): [(2105, 3), (120, 6), (121, 7), (2092, 15), (6948, -1)],
-    # Gnome Mage
-    (7, 8): [(56, 4), (35, 15), (6948, -1)],
-    # Gnome Warlock
-    (7, 9): [(56, 4), (35, 15), (6948, -1)],
-    # Troll Warrior
-    (8, 1): [(6125, 3), (6126, 6), (6127, 7), (12282, 15), (6948, -1)],
-    # Troll Hunter
-    (8, 3): [(148, 3), (147, 6), (129, 7), (12282, 15), (6948, -1)],
-    # Troll Rogue
-    (8, 4): [(2105, 3), (120, 6), (121, 7), (2092, 15), (6948, -1)],
-    # Troll Priest
-    (8, 5): [(53, 3), (52, 6), (51, 7), (36, 15), (6948, -1)],
-    # Troll Mage
-    (8, 8): [(56, 4), (35, 15), (6948, -1)],
-    # Troll Shaman
-    (8, 7): [(154, 3), (153, 6), (36, 15), (6948, -1)],
-}
-
-# Item cache: item_id -> (displayid, inventory_type)
-_item_cache = {}
+# Starter gear loaded from CharStartOutfit.dbc (client MPQ) at runtime.
+# Fallback only used if DBC extraction fails.
+_FALLBACK_GEAR = [(38, 9891, 4), (39, 9892, 7), (40, 10141, 8),
+                  (25, 1542, 21), (6948, 6418, 0)]
 
 
-def _get_item_display(item_id):
-    """Lookup item display info from world DB, with cache."""
-    if item_id in _item_cache:
-        return _item_cache[item_id]
-    try:
-        from modules.world_data import get_item_template
-        tpl = get_item_template(item_id)
-        if tpl:
-            result = (int(tpl["displayid"] or 0), int(tpl["InventoryType"] or 0))
-            _item_cache[item_id] = result
-            return result
-    except Exception:
-        pass
-    _item_cache[item_id] = (0, 0)
-    return (0, 0)
+def _get_starter_gear(race, cls):
+    """Get starter gear from DBC. Returns list of (item_id, display_id, inv_type)."""
+    from dbc import get_start_outfit
+    gear = get_start_outfit(race, cls)
+    return gear if gear else _FALLBACK_GEAR
 
 
 def _give_starter_gear(db_path, char_id, race, cls):
-    """Give starting items to a newly created character."""
-    gear = _STARTER_GEAR.get((race, cls))
-    if not gear:
-        # Fallback: give basic shirt + pants + weapon + hearthstone
-        gear = [(38, 3), (39, 6), (40, 7), (25, 15), (6948, -1)]
-    for item_id, _slot in gear:
-        add_inventory_item(db_path, char_id, item_id, 1)
+    """Give starting items to a newly created character.
+    Equippable items are shown via PLAYER_VISIBLE_ITEM fields on login,
+    so only non-equippable items (food, water, hearthstone) go into the bag."""
+    from dbc import invtype_to_slot
+    gear = _get_starter_gear(race, cls)
+    for item_id, _display, inv_type in gear:
+        slot = invtype_to_slot(inv_type)
+        if slot < 0:
+            # Non-equippable: add to bag inventory
+            add_inventory_item(db_path, char_id, item_id, 1)
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -221,11 +128,12 @@ def _char_enum_packet(chars, db_path=None) -> bytes:
 
         # Equipment display: 20 slots (19 equip + 1 bag), each = displayid(u32) + invtype(u8)
         equip_display = [None] * 20  # slot -> (displayid, invtype) or None
-        gear = _STARTER_GEAR.get((c["race"], c["class"]))
-        if gear:
-            for item_id, slot in gear:
-                if 0 <= slot < 20:
-                    equip_display[slot] = _get_item_display(item_id)
+        from dbc import invtype_to_slot
+        gear = _get_starter_gear(c["race"], c["class"])
+        for _item_id, display_id, inv_type in gear:
+            slot = invtype_to_slot(inv_type)
+            if 0 <= slot < 20:
+                equip_display[slot] = (display_id, inv_type)
         for slot in range(20):
             if equip_display[slot]:
                 buf.uint32(equip_display[slot][0])  # display id
@@ -269,8 +177,10 @@ def _build_update_object(char, extra_fields=None) -> bytes:
     # Visible equipment — set PLAYER_VISIBLE_ITEM_<n>_0 to the item's **entry ID**.
     # The client looks up the display model from its DBC cache; if unknown it
     # sends CMSG_ITEM_QUERY_SINGLE which movement.py handles.
-    gear = _STARTER_GEAR.get((race, cls)) or [(38, 3), (39, 6), (40, 7), (25, 15)]
-    for item_id, equip_slot in gear:
+    from dbc import invtype_to_slot
+    gear = _get_starter_gear(race, cls)
+    for item_id, _display, inv_type in gear:
+        equip_slot = invtype_to_slot(inv_type)
         if 0 <= equip_slot <= 18:
             fields[PLAYER_VISIBLE_ITEM_1_0 + equip_slot * _VISIBLE_ITEM_STRIDE] = item_id
 
@@ -326,7 +236,7 @@ def _presend_item_cache(session, char):
     equipment items.  This populates (or replaces) the client's WDB cache
     so it can render gear immediately without needing to query."""
     race, cls = char["race"], char["class"]
-    gear = _STARTER_GEAR.get((race, cls)) or [(38, 3), (39, 6), (40, 7), (25, 15)]
+    gear = _get_starter_gear(race, cls)
 
     # Also include inventory items
     try:
@@ -335,7 +245,7 @@ def _presend_item_cache(session, char):
     except Exception:
         inv_ids = set()
 
-    all_ids = {item_id for item_id, _ in gear if item_id} | inv_ids
+    all_ids = {item_id for item_id, _, _ in gear if item_id} | inv_ids
     sent = 0
     for item_id in all_ids:
         try:
@@ -701,21 +611,21 @@ class Module(BaseModule):
 
     def _char_delete(self, session, payload: bytes):
         if len(payload) < 8:
-            session._send(SMSG_CHAR_DELETE, bytes([0x39]))  # CHAR_DELETE_FAILED
+            session._send(SMSG_CHAR_DELETE, bytes([0x3A]))  # CHAR_DELETE_FAILED
             return
         guid = struct.unpack_from("<Q", payload, 0)[0]
         # Verify the character belongs to this account
         acct = get_account(session.db_path, session.account)
         if not acct:
-            session._send(SMSG_CHAR_DELETE, bytes([0x39]))
+            session._send(SMSG_CHAR_DELETE, bytes([0x3A]))
             return
         char = get_character_by_guid(session.db_path, guid)
         if not char or char["account_id"] != acct["id"]:
-            session._send(SMSG_CHAR_DELETE, bytes([0x39]))
+            session._send(SMSG_CHAR_DELETE, bytes([0x3A]))
             return
         delete_character(session.db_path, guid)
         log.info(f"Deleted char '{char['name']}' (id={guid}) for {session.account}")
-        session._send(SMSG_CHAR_DELETE, bytes([0x38]))  # CHAR_DELETE_SUCCESS
+        session._send(SMSG_CHAR_DELETE, bytes([0x39]))  # CHAR_DELETE_SUCCESS
 
     def _player_login(self, session, payload: bytes):
         guid = struct.unpack_from("<Q", payload, 0)[0]

@@ -154,6 +154,7 @@ Client/
 
 # WoW extracted data files (DBC, maps, vmaps, mmaps)
 dbc/
+dbc.db
 maps/
 vmaps/
 mmaps/

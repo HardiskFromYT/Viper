@@ -192,6 +192,7 @@ def get_class_levelstats(cls: int, level: int):
 # Update field indices for creatures — vanilla 1.12.1 (build 5875)
 _UNIT_GUID        = 0x0000
 _UNIT_TYPE        = 0x0002
+_UNIT_ENTRY       = 0x0003   # OBJECT_FIELD_ENTRY — creature template ID
 _UNIT_SCALE_X     = 0x0004
 _UNIT_HEALTH      = 0x0016
 _UNIT_MAXHEALTH   = 0x001C
@@ -215,10 +216,12 @@ def _build_creature_update(spawn_guid: int, template) -> bytes:
 
     full_guid = spawn_guid
 
+    entry = int(template["Entry"])
     fields = {
         _UNIT_GUID:        full_guid & 0xFFFFFFFF,
         _UNIT_GUID + 1:    (full_guid >> 32) & 0xFFFFFFFF,
         _UNIT_TYPE:        0x09,
+        _UNIT_ENTRY:       entry,
         _UNIT_SCALE_X:     _f2i(scale),
         _UNIT_HEALTH:      hp,
         _UNIT_MAXHEALTH:   hp,
@@ -267,10 +270,12 @@ def build_creatures_packet(spawns) -> bytes | None:
         faction = int(tpl["FactionAlliance"] or 14)
         hp     = int(tpl["MinLevelHealth"] or level * 10) or level * 10
 
+        entry = int(spawn["id"])
         fields = {
             _UNIT_GUID:        guid & 0xFFFFFFFF,
             _UNIT_GUID + 1:    (guid >> 32) & 0xFFFFFFFF,
             _UNIT_TYPE:        0x09,         # OBJECT | UNIT
+            _UNIT_ENTRY:       entry,        # creature template ID — client queries name from this
             _UNIT_SCALE_X:     _f2i(scale),
             _UNIT_HEALTH:      hp,
             _UNIT_MAXHEALTH:   hp,
