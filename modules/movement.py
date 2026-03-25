@@ -58,7 +58,8 @@ _SMSG_TIME_SYNC_REQ        = 0x390
 
 def _parse_movement(payload: bytes):
     """Parse movement info from a movement packet.
-    Format: move_flags(4) + timestamp(4) + x(4) + y(4) + z(4) + o(4) ..."""
+    Format: move_flags(4) + timestamp(4) + x(4) + y(4) + z(4) + o(4) ...
+    Returns (x, y, z, o) or None."""
     try:
         if len(payload) < 24:
             return None
@@ -69,6 +70,7 @@ def _parse_movement(payload: bytes):
         return x, y, z, o
     except Exception:
         return None
+
 
 
 class Module(BaseModule):
@@ -113,6 +115,12 @@ class Module(BaseModule):
 
     def _on_move(self, session, payload: bytes):
         if not session.char:
+            return
+        # During fly mode activation, briefly reject client movement to prevent
+        # the client's old flags from overwriting the new swim-in-air state
+        import time as _time
+        reject_until = getattr(session, "_fly_reject_until", 0)
+        if reject_until and _time.time() < reject_until:
             return
         pos = _parse_movement(payload)
         if not pos:

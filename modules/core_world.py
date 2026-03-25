@@ -59,7 +59,7 @@ UNIT_FIELD_BOUNDINGRADIUS  = 0x0081
 UNIT_FIELD_COMBATREACH     = 0x0082
 UNIT_FIELD_DISPLAYID       = 0x0083
 UNIT_FIELD_NATIVEDISPLAYID = 0x0084
-PLAYER_FIELD_COINAGE       = 0x00B3
+PLAYER_FIELD_COINAGE       = 0x0498
 PLAYER_BYTES               = 0x00C1
 PLAYER_BYTES_2             = 0x00C2
 PLAYER_BYTES_3             = 0x00C3
@@ -144,7 +144,7 @@ def _char_enum_packet(chars, db_path=None) -> bytes:
     return buf.bytes()
 
 
-def _build_update_object(char, extra_fields=None) -> bytes:
+def _build_update_object(char, extra_fields=None, move_flags=0) -> bytes:
     guid = char["id"]
     race, cls, gender = char["race"], char["class"], char["gender"]
     display = RACE_DISPLAY.get(race, (49, 50))[gender & 1]
@@ -173,7 +173,7 @@ def _build_update_object(char, extra_fields=None) -> bytes:
                                      (char["hair_style"] << 16) | (char["hair_color"] << 24)),
         PLAYER_BYTES_2:             char["facial"],
         PLAYER_BYTES_3:             gender,         # gender byte
-        PLAYER_FIELD_COINAGE:       int(char.get("money", 0)) & 0xFFFFFFFF,
+        PLAYER_FIELD_COINAGE:       int(char["money"] if "money" in char.keys() else 0) & 0xFFFFFFFF,
     }
 
     # Visible equipment — set PLAYER_VISIBLE_ITEM_<n>_0 to the item's **entry ID**.
@@ -192,7 +192,7 @@ def _build_update_object(char, extra_fields=None) -> bytes:
 
     # Movement block
     mv = ByteBuffer()
-    mv.uint32(0)                                     # move flags
+    mv.uint32(move_flags)                              # move flags
     mv.uint32(int(time.time() * 1000) & 0xFFFFFFFF)  # timestamp
     mv.float32(char["pos_x"]); mv.float32(char["pos_y"])
     mv.float32(char["pos_z"]); mv.float32(char["orientation"])

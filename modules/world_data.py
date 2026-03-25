@@ -493,7 +493,7 @@ class Module(BaseModule):
                     session._known_creatures.add(guid)
                     session._known_positions[guid] = (
                         float(s["position_x"]), float(s["position_y"]))
-                    log.debug(f"Sent {len(spawns)} creatures to {char['name']}")
+                log.debug(f"Sent {len(spawns)} creatures to {char['name']}")
         except Exception as e:
             log.error(f"Error sending creatures: {e}")
 

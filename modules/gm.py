@@ -8,7 +8,6 @@ import re
 
 from modules.base import BaseModule
 from opcodes import (CMSG_MESSAGECHAT, SMSG_MESSAGECHAT, SMSG_UPDATE_OBJECT,
-                     SMSG_MOVE_SET_HOVER, SMSG_MOVE_UNSET_HOVER,
                      SMSG_FORCE_RUN_SPEED_CHANGE, SMSG_FORCE_SWIM_SPEED_CHANGE)
 from packets import ByteBuffer, pack_guid
 from database import (get_character_by_name, set_gm_level, set_char_level,
@@ -102,7 +101,7 @@ CHAT_MSG_SYSTEM = 10
 UNIT_FIELD_HEALTH      = 0x0016
 UNIT_FIELD_MAXHEALTH   = 0x001C
 UNIT_FIELD_LEVEL       = 0x0022
-PLAYER_FIELD_COINAGE   = 0x00B3
+PLAYER_FIELD_COINAGE   = 0x0498
 
 # Gold cap in copper: 214748g 36s 47c
 _GOLD_CAP = 2147483647
@@ -171,7 +170,7 @@ class Module(BaseModule):
         self.reg_gm(server, "setpos",    self._cmd_setpos,
                     help_text=".setpos <char> <x> <y> <z>  — set offline char position", min_gm=2)
         self.reg_gm(server, "fly",       self._cmd_fly,
-                    help_text=".fly <on|off>  — toggle GM flight", min_gm=1)
+                    help_text=".fly <on|off>  — toggle GM flight (swim in air)", min_gm=1)
         self.reg_gm(server, "gold",      self._cmd_gold,
                     help_text=".gold <amount|cap|reset>  — add gold (e.g. 1g27s19c)", min_gm=1)
 
@@ -303,14 +302,22 @@ class Module(BaseModule):
         except ValueError:
             session.send_sys_msg("Speed must be a number.")
             return
-        speed = 7.0 * mult
-        # SMSG_FORCE_RUN_SPEED_CHANGE (0x0E2)
+        guid = session.char["id"] if session.char else 0
+        run_speed = 7.0 * mult
+        swim_speed = 4.7222 * mult
+        # SMSG_FORCE_RUN_SPEED_CHANGE
         buf = ByteBuffer()
-        buf.raw(pack_guid(session.char["id"] if session.char else 0))
-        buf.uint32(0)           # move counter
-        buf.float32(speed)
-        session._send(0x0E2, buf.bytes())
-        session.send_sys_msg(f"Speed set to {mult}x ({speed:.1f}).")
+        buf.raw(pack_guid(guid))
+        buf.uint32(0)
+        buf.float32(run_speed)
+        session._send(SMSG_FORCE_RUN_SPEED_CHANGE, buf.bytes())
+        # SMSG_FORCE_SWIM_SPEED_CHANGE — affects fly speed in swim-in-air mode
+        buf = ByteBuffer()
+        buf.raw(pack_guid(guid))
+        buf.uint32(0)
+        buf.float32(swim_speed)
+        session._send(SMSG_FORCE_SWIM_SPEED_CHANGE, buf.bytes())
+        session.send_sys_msg(f"Speed set to {mult}x.")
 
     def _cmd_announce(self, session, args):
         if not args:
@@ -391,32 +398,82 @@ class Module(BaseModule):
 
     # ── .fly on/off ──────────────────────────────────────────────────
 
+    # Movement flags for "swim in air" fly mode (vanilla 1.12.1 technique)
+    _FLY_FLAGS = 0x00000400 | 0x00200000 | 0x01000000  # LEVITATING | SWIMMING | FLYING
+
+    def _send_fly_heartbeat(self, session, move_flags):
+        """Send MSG_MOVE_HEARTBEAT with given move flags to self + nearby players.
+        This is how MaNGOS/VMaNGOS implement GM fly: overwrite movement flags
+        and broadcast a heartbeat so the client enters swimming-in-air mode."""
+        from opcodes import MSG_MOVE_HEARTBEAT
+        char = session.char
+        guid = char["id"]
+
+        buf = ByteBuffer()
+        buf.raw(pack_guid(guid))
+        buf.uint32(move_flags)
+        buf.uint32(int(time.time() * 1000) & 0xFFFFFFFF)  # timestamp
+        buf.float32(float(char["pos_x"]))
+        buf.float32(float(char["pos_y"]))
+        buf.float32(float(char["pos_z"]))
+        buf.float32(float(char["orientation"]))
+        # When MOVEFLAG_SWIMMING (0x00200000) is set, client expects a pitch float
+        if move_flags & 0x00200000:
+            buf.float32(0.0)  # pitch
+        buf.uint32(0)  # fall time
+
+        data = buf.bytes()
+        # Send to self
+        session._send(MSG_MOVE_HEARTBEAT, data)
+        # Broadcast to other nearby players
+        for s in self._server.get_online_players():
+            if s is not session and s.char:
+                s._send(MSG_MOVE_HEARTBEAT, data)
+
     def _cmd_fly(self, session, args):
         if not session.char:
             session.send_sys_msg("Not in world.")
             return
-        if not args or args[0].lower() not in ("on", "off"):
+        if not args:
             session.send_sys_msg("Usage: .fly <on|off>")
             return
 
+        sub = args[0].lower()
         guid = session.char["id"]
-        enable = args[0].lower() == "on"
 
-        if enable:
-            # Enable hover mode (swim-in-air flight for vanilla 1.12)
-            buf = ByteBuffer()
-            buf.raw(pack_guid(guid))
-            buf.uint32(0)   # move counter
-            session._send(SMSG_MOVE_SET_HOVER, buf.bytes())
-            session._fly_mode = True
-            session.send_sys_msg("Fly mode ON.")
-        else:
+        if sub == "on":
+            # Boost swim speed for faster flight
             buf = ByteBuffer()
             buf.raw(pack_guid(guid))
             buf.uint32(0)
-            session._send(SMSG_MOVE_UNSET_HOVER, buf.bytes())
+            buf.float32(4.7222 * 3.0)  # 3x normal swim speed
+            session._send(SMSG_FORCE_SWIM_SPEED_CHANGE, buf.bytes())
+
+            # Send heartbeat with fly flags — puts client into swim-in-air mode
+            self._send_fly_heartbeat(session, self._FLY_FLAGS)
+
+            # Reject client movement packets briefly to prevent flag overwrite
+            session._fly_mode = True
+            session._fly_reject_until = time.time() + 0.15
+            session.send_sys_msg("Fly mode ON. Do not jump or it will break.")
+
+        elif sub == "off":
+            # Send heartbeat with no flags — back to normal
+            self._send_fly_heartbeat(session, 0)
+
+            # Reset swim speed
+            buf = ByteBuffer()
+            buf.raw(pack_guid(guid))
+            buf.uint32(0)
+            buf.float32(4.7222)  # normal swim speed
+            session._send(SMSG_FORCE_SWIM_SPEED_CHANGE, buf.bytes())
+
             session._fly_mode = False
+            session._fly_reject_until = 0
             session.send_sys_msg("Fly mode OFF.")
+
+        else:
+            session.send_sys_msg("Usage: .fly <on|off>")
 
     # ── .gold ────────────────────────────────────────────────────────
 
@@ -485,9 +542,9 @@ def _parse_gold(text: str) -> int | None:
     # Try pattern: optional gold, optional silver, optional copper
     m = re.fullmatch(r"(?:(\d+)g)?(?:(\d+)s)?(?:(\d+)c)?", text)
     if not m or not any(m.groups()):
-        # Try plain number (treat as copper)
+        # Plain number = treat as gold
         try:
-            return int(text)
+            return int(text) * 10000
         except ValueError:
             return None
     gold = int(m.group(1) or 0)
