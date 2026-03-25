@@ -1,6 +1,6 @@
-# TestEmu — WoW 1.12 Server Emulator
+# Viper — WoW 1.12.1 Server Emulator
 
-A minimal World of Warcraft 1.12.1 (patch 5875) private server emulator written in pure Python 3.10+. No external dependencies — stdlib only.
+A World of Warcraft 1.12.1 (vanilla, build 5875) private server emulator written in pure Python 3.10+. No external dependencies — stdlib only.
 
 ## Features
 
@@ -8,13 +8,16 @@ A minimal World of Warcraft 1.12.1 (patch 5875) private server emulator written 
 - SRP6 authentication and session encryption
 - Realm list (single configurable realm)
 - Character creation, enumeration, and deletion (all races/classes)
-- World entry — players spawn at race-appropriate starting locations
-- Movement tracking and persistence
-- Chat
-- Inventory and race/class-appropriate starting gear
+- World entry with race-appropriate starting locations and gear
 - Starter spells per class
+- Movement tracking and persistence
+- Continuous creature/NPC visibility updates as player moves
+- Chat (say/yell) with multiplayer support
+- Inventory and gold management
 - Creature/NPC/item queries from MaNGOS Zero world database
-- GM command system (`.help`, `.teleport`, `.level`, `.speed`, `.announce`, `.kick`, `.setgm`, …)
+- GM command system (`.help`, `.teleport`, `.level`, `.speed`, `.fly`, `.gold`, `.announce`, `.kick`, `.setgm`, ...)
+- GM flight (swim-in-air technique)
+- Login screen news feed with WoW markup support
 - Interactive server CLI with hot-reloadable modules
 - Ping/pong keepalive
 
@@ -77,12 +80,18 @@ Type these in the chat box while logged in with a GM account:
 | Command | Description |
 |---|---|
 | `.help` | List available GM commands |
-| `.teleport <zone>` | Teleport to a named zone |
+| `.teleport <zone>` | Teleport to a named zone or coordinates |
 | `.level <n>` | Set your character's level |
-| `.speed <n>` | Set movement speed multiplier |
+| `.speed <n>` | Set movement speed multiplier (run + swim) |
+| `.fly <on\|off>` | Toggle GM flight (swim in air) |
+| `.gold <amount\|cap\|reset>` | Add gold (e.g. `1g27s19c`, `50`), set to cap, or reset |
+| `.heal` | Restore full HP |
+| `.info` | Show position, zone, and account info |
+| `.players` | List online players |
 | `.announce <msg>` | Server-wide announcement |
 | `.kick <name>` | Kick a player |
 | `.setgm <name> <level>` | Set another account's GM level (0–3) |
+| `.setpos <char> <x> <y> <z>` | Set an offline character's position |
 
 ## Project Structure
 
@@ -102,10 +111,11 @@ cli.py            — Interactive admin CLI
 
 modules/
   core_world.py   — Character/login/teleport handlers, starter gear
-  movement.py     — Movement, logout, zone, and query handlers
+  movement.py     — Movement, logout, zone, creature/item queries
   gm.py           — GM command parser and handlers
-  items.py        — Item definitions and inventory commands
-  world_data.py   — MaNGOS world DB integration, creature spawning
+  items.py        — Item definitions and inventory
+  world_data.py   — MaNGOS world DB integration, creature spawning/visibility
+  news.py         — Login screen news feed
   db.py           — Database migrations and admin commands
 ```
 
