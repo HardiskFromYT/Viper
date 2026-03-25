@@ -2,7 +2,9 @@
 Runs in its own executor so it never blocks the asyncio event loop.
 """
 import asyncio
+import importlib
 import logging
+import sys
 import time
 
 log = logging.getLogger("cli")
@@ -227,7 +229,14 @@ def _register_builtin_commands(server):
             return server.reload_core(args[1])
         if args[0].lower() == "all":
             results = []
+            # Reload core dependencies first so modules pick up changes
             import config
+            for core in ("opcodes", "packets", "database", "config"):
+                if core in sys.modules:
+                    try:
+                        importlib.reload(sys.modules[core])
+                    except Exception as ex:
+                        results.append(f"Core reload '{core}' error: {ex}")
             for name in config.MODULES:
                 results.append(server.load_module(name))
             return "\n".join(f"  {r}" for r in results)
