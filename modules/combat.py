@@ -1113,6 +1113,12 @@ def _player_die(session, killer_guid: int = 0):
     session._is_ghost = False
     session._is_dead = True
 
+    # Persist death state to DB
+    from database import save_death_state
+    save_death_state(session.db_path, player_guid, True, False,
+                     session._corpse_x, session._corpse_y,
+                     session._corpse_z, session._corpse_map)
+
     # Stop player's own attack
     _stop_player_attack(session)
 
@@ -1189,6 +1195,12 @@ def _handle_repop_request(session, payload: bytes):
     session._is_ghost = True
     session.health = session.max_health  # Ghosts have full HP bar
 
+    # Persist ghost state to DB
+    from database import save_death_state
+    save_death_state(session.db_path, player_guid, True, True,
+                     session._corpse_x, session._corpse_y,
+                     session._corpse_z, session._corpse_map)
+
     # Save original display ID for restoration on resurrect
     from modules.core_world import RACE_DISPLAY
     race, gender = session.char["race"], session.char["gender"]
@@ -1264,6 +1276,10 @@ def _player_resurrect_at(session, x: float, y: float, z: float):
     # Clear ghost state
     session._is_ghost = False
     session._is_dead = False
+
+    # Clear death state in DB
+    from database import save_death_state
+    save_death_state(session.db_path, player_guid, False, False)
     session.health = max(1, session.max_health // 2)  # Resurrect with 50% HP
     session.mana = session.max_mana
 
@@ -1309,6 +1325,10 @@ def _player_resurrect(session):
     player_guid = session.char["id"]
     session._is_ghost = False
     session._is_dead = False
+
+    # Clear death state in DB
+    from database import save_death_state
+    save_death_state(session.db_path, player_guid, False, False)
     session.health = session.max_health
     session.mana = session.max_mana
 

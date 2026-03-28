@@ -800,8 +800,43 @@ class Module(BaseModule):
         session._corpse_y = 0.0
         session._corpse_z = 0.0
         session._corpse_map = 0
-        log.info(f"Player login: {char['name']} (GUID {guid}) HP={session.max_health} MP={session.max_mana}")
+
+        # Restore death/ghost state from DB (survives logout)
+        from database import get_death_state
+        ds = get_death_state(session.db_path, guid)
+        if ds and (ds["is_dead"] or ds["is_ghost"]):
+            session._is_dead = ds["is_dead"]
+            session._is_ghost = ds["is_ghost"]
+            session._corpse_x = ds["corpse_x"]
+            session._corpse_y = ds["corpse_y"]
+            session._corpse_z = ds["corpse_z"]
+            session._corpse_map = ds["corpse_map"]
+            if ds["is_ghost"]:
+                session.health = session.max_health  # Ghosts show full HP
+            else:
+                session.health = 0  # Dead but not yet released
+            log.info(f"Player login: {char['name']} restoring death state "
+                     f"dead={ds['is_dead']} ghost={ds['is_ghost']}")
+
+        log.info(f"Player login: {char['name']} (GUID {guid}) HP={session.health} MP={session.max_mana}")
         _send_login_packets(session, char)
+
+        # If player is a ghost, re-apply ghost visuals after login packets
+        if session._is_ghost:
+            from modules.combat import (GHOST_DISPLAY_ID, PLAYER_FLAG_GHOST,
+                                        _build_displayid_update, _build_player_flags_update,
+                                        _send_corpse_query_response)
+            # Set ghost display + flags
+            session._send(SMSG_UPDATE_OBJECT, _build_player_flags_update(guid, PLAYER_FLAG_GHOST))
+            session._send(SMSG_UPDATE_OBJECT, _build_displayid_update(guid, GHOST_DISPLAY_ID))
+            # Save original display for resurrect
+            session._original_display_id = RACE_DISPLAY.get(char["race"], (49, 50))[char["gender"] & 1]
+            # Send corpse location
+            _send_corpse_query_response(session)
+        elif session._is_dead:
+            # Dead but not released — send death update
+            from modules.combat import _build_death_update
+            session._send(SMSG_UPDATE_OBJECT, _build_death_update(guid))
 
     def _ping(self, session, payload: bytes):
         # CMSG_PING: uint32 ping_id + uint32 latency

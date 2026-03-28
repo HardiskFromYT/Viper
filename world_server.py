@@ -134,7 +134,7 @@ class WorldSession(asyncio.Protocol):
             self._on_auth_session(payload)
             return
         if not self.server.dispatch_packet(self, opcode, payload):
-            log.debug(f"  Unhandled opcode 0x{opcode:04X} ({len(payload)} bytes)")
+            log.info(f"  Unhandled opcode 0x{opcode:04X} ({len(payload)} bytes)")
 
     # ------------------------------------------------------------------
     # Auth session (stays here — sets up encryption, can't be in a module)

@@ -381,6 +381,68 @@ def update_char_zone(db_path: str, char_id: int, zone_id: int):
     conn.close()
 
 
+def save_death_state(db_path: str, char_id: int, is_dead: bool, is_ghost: bool,
+                     corpse_x: float = 0.0, corpse_y: float = 0.0,
+                     corpse_z: float = 0.0, corpse_map: int = 0):
+    """Persist death/ghost state to DB so it survives logout."""
+    conn = _conn(db_path)
+    # Ensure columns exist (auto-migrate)
+    try:
+        conn.execute("ALTER TABLE characters ADD COLUMN is_dead INTEGER NOT NULL DEFAULT 0")
+    except Exception:
+        pass
+    try:
+        conn.execute("ALTER TABLE characters ADD COLUMN is_ghost INTEGER NOT NULL DEFAULT 0")
+    except Exception:
+        pass
+    try:
+        conn.execute("ALTER TABLE characters ADD COLUMN corpse_x REAL NOT NULL DEFAULT 0")
+    except Exception:
+        pass
+    try:
+        conn.execute("ALTER TABLE characters ADD COLUMN corpse_y REAL NOT NULL DEFAULT 0")
+    except Exception:
+        pass
+    try:
+        conn.execute("ALTER TABLE characters ADD COLUMN corpse_z REAL NOT NULL DEFAULT 0")
+    except Exception:
+        pass
+    try:
+        conn.execute("ALTER TABLE characters ADD COLUMN corpse_map INTEGER NOT NULL DEFAULT 0")
+    except Exception:
+        pass
+    conn.execute(
+        """UPDATE characters SET is_dead=?, is_ghost=?,
+           corpse_x=?, corpse_y=?, corpse_z=?, corpse_map=?
+           WHERE id=?""",
+        (int(is_dead), int(is_ghost), corpse_x, corpse_y, corpse_z, corpse_map, char_id))
+    conn.commit()
+    conn.close()
+
+
+def get_death_state(db_path: str, char_id: int) -> dict | None:
+    """Load death/ghost state from DB."""
+    conn = _conn(db_path)
+    try:
+        row = conn.execute(
+            "SELECT is_dead, is_ghost, corpse_x, corpse_y, corpse_z, corpse_map "
+            "FROM characters WHERE id=?", (char_id,)
+        ).fetchone()
+        conn.close()
+        if row:
+            return {
+                "is_dead": bool(row["is_dead"]),
+                "is_ghost": bool(row["is_ghost"]),
+                "corpse_x": float(row["corpse_x"]),
+                "corpse_y": float(row["corpse_y"]),
+                "corpse_z": float(row["corpse_z"]),
+                "corpse_map": int(row["corpse_map"]),
+            }
+    except Exception:
+        conn.close()
+    return None
+
+
 # ── Inventory ─────────────────────────────────────────────────────────────────
 
 def get_inventory(db_path: str, char_id: int):
