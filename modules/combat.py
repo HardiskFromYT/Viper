@@ -30,7 +30,7 @@ from opcodes import (
     SMSG_UPDATE_OBJECT, SMSG_DESTROY_OBJECT,
     SMSG_MONSTER_MOVE,
     CMSG_REPOP_REQUEST, CMSG_RECLAIM_CORPSE,
-    SMSG_CORPSE_RECLAIM_DELAY,
+    MSG_CORPSE_QUERY, SMSG_CORPSE_RECLAIM_DELAY,
 )
 from packets import ByteBuffer, pack_guid
 
@@ -1105,6 +1105,38 @@ def _player_die(session, killer_guid: int = 0):
     # when they click it.
 
 
+def _send_corpse_query_response(session):
+    """Send MSG_CORPSE_QUERY response with corpse location for minimap marker."""
+    if not session.char:
+        return
+    if not getattr(session, "_is_ghost", False):
+        # No corpse — send "not found"
+        session._send(MSG_CORPSE_QUERY, struct.pack("<B", 0))
+        return
+
+    corpse_x = getattr(session, "_corpse_x", 0.0)
+    corpse_y = getattr(session, "_corpse_y", 0.0)
+    corpse_z = getattr(session, "_corpse_z", 0.0)
+    corpse_map = getattr(session, "_corpse_map", 0)
+
+    # Response: found(u8=1) + mapid(i32) + x(f32) + y(f32) + z(f32) + corpsemapid(u32)
+    # mapid = map where the marker should show (same as corpse map for open world)
+    # corpsemapid = actual map where corpse physically exists
+    buf = ByteBuffer()
+    buf.uint8(1)                    # found = true
+    buf.uint32(corpse_map)          # mapid (where marker shows)
+    buf.float32(corpse_x)           # x
+    buf.float32(corpse_y)           # y
+    buf.float32(corpse_z)           # z
+    buf.uint32(corpse_map)          # corpsemapid (actual map)
+    session._send(MSG_CORPSE_QUERY, buf.bytes())
+
+
+def _handle_corpse_query(session, payload: bytes):
+    """Handle MSG_CORPSE_QUERY — client asks where the corpse is."""
+    _send_corpse_query_response(session)
+
+
 def _handle_repop_request(session, payload: bytes):
     """Handle CMSG_REPOP_REQUEST — player clicked Release Spirit."""
     if not session.char:
@@ -1148,6 +1180,9 @@ def _handle_repop_request(session, payload: bytes):
     # Teleport to graveyard
     from modules.core_world import teleport_player
     teleport_player(session, map_id, gx, gy_y, gz, 0.0)
+
+    # Send corpse location so the minimap shows the corpse marker + arrow
+    _send_corpse_query_response(session)
 
     log.info(f"Player {session.char['name']} released spirit → graveyard at "
              f"({gx:.0f}, {gy_y:.0f}, {gz:.0f})")
@@ -1296,6 +1331,7 @@ class Module(BaseModule):
         self.reg_packet(server, CMSG_ATTACKSTOP, self._on_attack_stop)
         self.reg_packet(server, CMSG_REPOP_REQUEST, self._on_repop_request)
         self.reg_packet(server, CMSG_RECLAIM_CORPSE, self._on_reclaim_corpse)
+        self.reg_packet(server, MSG_CORPSE_QUERY, self._on_corpse_query)
 
         log.info("combat module loaded")
 
@@ -1343,3 +1379,7 @@ class Module(BaseModule):
         """Handle CMSG_RECLAIM_CORPSE — player wants to resurrect at corpse."""
         log.info(f"RECLAIM_CORPSE from {session.char['name'] if session.char else '?'}")
         _handle_reclaim_corpse(session, payload)
+
+    def _on_corpse_query(self, session, payload: bytes):
+        """Handle MSG_CORPSE_QUERY — client asks where their corpse is."""
+        _handle_corpse_query(session, payload)
