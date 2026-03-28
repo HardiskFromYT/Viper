@@ -983,7 +983,7 @@ def _handle_sell_item(session, vendor_guid: int, item_guid: int, count: int):
 # The client uses NpcFlags from UNIT_NPC_FLAGS field (0x0025) to decide
 # what interactions are available. We need to send this in creature objects.
 
-UNIT_NPC_FLAGS = 0x0025
+UNIT_NPC_FLAGS = 0x0093
 
 
 # ── Module ───────────────────────────────────────────────────────────────────
