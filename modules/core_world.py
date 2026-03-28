@@ -801,6 +801,7 @@ class Module(BaseModule):
         session._corpse_z = 0.0
         session._corpse_map = 0
         session._quest_log = {}           # {quest_id: quest_data}
+        session._quest_slots = {}         # {quest_id: slot_index}
         session._completed_quests = set() # set of completed quest IDs
 
         # Restore death/ghost state from DB (survives logout)

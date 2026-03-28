@@ -60,6 +60,13 @@ CMSG_BINDER_ACTIVATE       = 0x1B5
 SMSG_BINDER_CONFIRM        = 0x19B
 
 SMSG_UPDATE_OBJECT = 0x0A9
+SMSG_QUEST_QUERY_RESPONSE = 0x005D
+
+# ── Quest log update fields (vanilla 1.12.1 build 5875) ─────────────────────
+# Each slot: quest_id (uint32), state (uint32), timer (uint32) — stride 3
+PLAYER_QUEST_LOG_1_1 = 0x00C6
+_QUEST_LOG_STRIDE    = 3
+_MAX_QUEST_SLOTS     = 20
 
 # ── NpcFlags ─────────────────────────────────────────────────────────────────
 
@@ -259,6 +266,108 @@ def _player_completed_quest(session, quest_id: int) -> bool:
     """Check if player has already turned in this quest."""
     completed = getattr(session, "_completed_quests", set())
     return quest_id in completed
+
+
+# ── Quest log field updates ──────────────────────────────────────────────────
+
+def _find_free_quest_slot(session) -> int:
+    """Find the first free quest log slot (0-based). Returns -1 if full."""
+    used = getattr(session, "_quest_slots", {})  # {quest_id: slot_index}
+    for i in range(_MAX_QUEST_SLOTS):
+        if i not in used.values():
+            return i
+    return -1
+
+
+def _send_quest_log_update(session, slot: int, quest_id: int, state: int = 0):
+    """Send partial UPDATE_OBJECT to set a quest log slot on the player."""
+    base_field = PLAYER_QUEST_LOG_1_1 + slot * _QUEST_LOG_STRIDE
+    fields = {
+        base_field:     quest_id,       # quest ID (0 = empty)
+        base_field + 1: state,          # state/counter
+        base_field + 2: 0,              # timer
+    }
+
+    guid = session.char_guid
+    max_field = max(fields.keys()) + 1
+    num_blocks = (max_field + 31) // 32
+    mask_words = [0] * num_blocks
+    field_data = bytearray()
+    for idx in sorted(fields):
+        mask_words[idx // 32] |= 1 << (idx % 32)
+    for idx in sorted(fields):
+        field_data += struct.pack("<I", int(fields[idx]) & 0xFFFFFFFF)
+
+    obj = ByteBuffer()
+    obj.raw(pack_guid(guid))
+    obj.uint8(num_blocks)
+    for w in mask_words:
+        obj.uint32(w)
+    obj.raw(field_data)
+
+    pkt = ByteBuffer()
+    pkt.uint32(1)       # count
+    pkt.uint8(0)        # has_transport
+    pkt.uint8(0)        # update_type = UPDATETYPE_VALUES
+    pkt.raw(obj.bytes())
+    session._send(SMSG_UPDATE_OBJECT, pkt.bytes())
+
+
+def _send_quest_query_response(session, quest: dict):
+    """Send SMSG_QUEST_QUERY_RESPONSE so the client caches quest data."""
+    buf = ByteBuffer()
+    quest_id = int(quest["entry"])
+    buf.uint32(quest_id)
+    buf.uint32(int(quest.get("Method") or 0))           # quest method
+    buf.uint32(int(quest.get("QuestLevel") or 1))        # quest level
+    buf.uint32(int(quest.get("ZoneOrSort") or 0))         # zone/sort
+    buf.uint32(int(quest.get("Type") or 0))               # type
+    buf.uint32(int(quest.get("RepObjectiveFaction") or 0))
+    buf.uint32(int(quest.get("RepObjectiveValue") or 0))
+    buf.uint32(0)   # required opposite faction
+    buf.uint32(0)   # required opposite value
+    buf.uint32(int(quest.get("NextQuestInChain") or 0))
+    buf.uint32(max(0, int(quest.get("RewOrReqMoney") or 0)))  # money reward
+    buf.uint32(int(quest.get("RewMoneyMaxLevel") or 0))
+    buf.uint32(int(quest.get("RewSpell") or 0))
+    buf.uint32(int(quest.get("SrcItemId") or 0))
+    buf.uint32(int(quest.get("QuestFlags") or 0))
+
+    # 4 reward items
+    for i in range(1, 5):
+        buf.uint32(int(quest.get(f"RewItemId{i}") or 0))
+        buf.uint32(int(quest.get(f"RewItemCount{i}") or 0))
+
+    # 6 choice reward items
+    for i in range(1, 7):
+        buf.uint32(int(quest.get(f"RewChoiceItemId{i}") or 0))
+        buf.uint32(int(quest.get(f"RewChoiceItemCount{i}") or 0))
+
+    # Point map/x/y/options
+    buf.uint32(int(quest.get("PointMapId") or 0))
+    buf.float32(float(quest.get("PointX") or 0.0))
+    buf.float32(float(quest.get("PointY") or 0.0))
+    buf.uint32(int(quest.get("PointOpt") or 0))
+
+    # Strings
+    buf.cstring(str(quest.get("Title") or ""))
+    buf.cstring(str(quest.get("Objectives") or ""))
+    buf.cstring(str(quest.get("Details") or ""))
+    buf.cstring(str(quest.get("EndText") or ""))
+
+    # 4 objectives
+    for i in range(1, 5):
+        creature_or_go = int(quest.get(f"ReqCreatureOrGOId{i}") or 0)
+        buf.uint32(creature_or_go & 0xFFFFFFFF)
+        buf.uint32(int(quest.get(f"ReqCreatureOrGOCount{i}") or 0))
+        buf.uint32(int(quest.get(f"ReqItemId{i}") or 0))
+        buf.uint32(int(quest.get(f"ReqItemCount{i}") or 0))
+
+    # 4 objective texts
+    for i in range(1, 5):
+        buf.cstring(str(quest.get(f"ObjectiveText{i}") or ""))
+
+    session._send(SMSG_QUEST_QUERY_RESPONSE, buf.bytes())
 
 
 # ── Gossip packet builders ───────────────────────────────────────────────────
@@ -565,6 +674,37 @@ def _handle_gossip_hello(session, npc_guid: int):
     npc_flags = _get_npc_flags(entry)
     log.info(f"GOSSIP_HELLO: entry={entry} flags={npc_flags:#x}")
 
+    # For NPCs without gossip flag, go directly to their primary interaction
+    has_gossip = bool(npc_flags & NPC_FLAG_GOSSIP)
+
+    if not has_gossip:
+        # No gossip flag — direct action based on NPC type
+        if npc_flags & NPC_FLAG_QUESTGIVER:
+            quest_items = _collect_npc_quests(session, entry)
+            if len(quest_items) == 1:
+                quest = _get_quest(quest_items[0]["quest_id"])
+                if quest:
+                    if quest_items[0]["icon"] == DIALOG_STATUS_REWARD:
+                        session._send(SMSG_QUESTGIVER_OFFER_REWARD,
+                                      _build_offer_reward(npc_guid, quest))
+                    else:
+                        session._send(SMSG_QUESTGIVER_QUEST_DETAILS,
+                                      _build_quest_details(npc_guid, quest))
+                    return
+            elif quest_items:
+                _send_quest_list(session, npc_guid, entry)
+                return
+        if npc_flags & NPC_FLAG_VENDOR:
+            _send_vendor_list(session, npc_guid, entry)
+            return
+        if npc_flags & NPC_FLAG_TRAINER:
+            _send_trainer_list(session, npc_guid, entry)
+            return
+        if npc_flags & NPC_FLAG_SPIRITHEALER:
+            return  # Spirit healer interaction handled elsewhere
+
+    # --- NPC has gossip flag: show gossip menu ---
+
     # Collect available quests for this NPC
     quest_items = _collect_npc_quests(session, entry)
 
@@ -610,18 +750,6 @@ def _handle_gossip_hello(session, npc_guid: int):
                 "npc_option_npcflag": NPC_FLAG_INNKEEPER,
                 "box_coded": 0, "box_money": 0, "box_text": "",
             })
-
-    # If only one action and no quests, go directly
-    if not gossip_options and not quest_items:
-        # Pure questgiver with no available quests — just show empty gossip
-        if npc_flags & NPC_FLAG_QUESTGIVER:
-            pass  # Fall through to send empty gossip
-        elif npc_flags & NPC_FLAG_VENDOR:
-            _send_vendor_list(session, npc_guid, entry)
-            return
-        elif npc_flags & NPC_FLAG_TRAINER:
-            _send_trainer_list(session, npc_guid, entry)
-            return
 
     # If no gossip options and only one quest available, go directly to quest details
     if not gossip_options and len(quest_items) == 1:
@@ -809,15 +937,29 @@ def _handle_questgiver_accept(session, npc_guid: int, quest_id: int):
     # Add to quest log
     if not hasattr(session, "_quest_log"):
         session._quest_log = {}
+    if not hasattr(session, "_quest_slots"):
+        session._quest_slots = {}  # {quest_id: slot_index}
+
+    # Find free slot
+    slot = _find_free_quest_slot(session)
+    if slot < 0:
+        session.send_sys_msg("Quest log is full.")
+        return
 
     session._quest_log[quest_id] = {
         "quest": quest,
         "complete": False,
         "objectives": {},
     }
+    session._quest_slots[quest_id] = slot
 
-    log.info(f"{session.char['name']} accepted quest [{quest_id}] {quest.get('Title')}")
-    session.send_sys_msg(f"Quest accepted: {quest.get('Title')}")
+    log.info(f"{session.char['name']} accepted quest [{quest_id}] {quest.get('Title')} slot={slot}")
+
+    # Send quest data to client cache
+    _send_quest_query_response(session, quest)
+
+    # Update quest log field on player
+    _send_quest_log_update(session, slot, quest_id, state=0)
 
     # Auto-complete quests that have no objectives (exploration, delivery, etc.)
     has_objectives = False
@@ -860,6 +1002,13 @@ def _handle_questgiver_choose_reward(session, npc_guid: int, quest_id: int,
     if not hasattr(session, "_completed_quests"):
         session._completed_quests = set()
     session._completed_quests.add(quest_id)
+
+    # Clear quest log slot on player
+    if not hasattr(session, "_quest_slots"):
+        session._quest_slots = {}
+    slot = session._quest_slots.pop(quest_id, None)
+    if slot is not None:
+        _send_quest_log_update(session, slot, 0, state=0)  # quest_id=0 clears slot
 
     # Give money reward
     money = max(0, int(quest.get("RewOrReqMoney") or 0))
