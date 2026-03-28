@@ -374,20 +374,18 @@ def _send_quest_query_response(session, quest: dict):
 
 def _build_gossip_message(npc_guid: int, text_id: int, menu_id: int,
                            gossip_options: list, quests: list) -> bytes:
-    """Build SMSG_GOSSIP_MESSAGE."""
+    """Build SMSG_GOSSIP_MESSAGE (vanilla 1.12.1 format from VMaNGOS)."""
     buf = ByteBuffer()
     buf.uint64(npc_guid)
     buf.uint32(text_id)
-    buf.uint32(menu_id)
+    # NOTE: No menu_id field in vanilla — client does NOT expect it
     buf.uint32(len(gossip_options))
 
     for i, opt in enumerate(gossip_options):
         buf.uint32(i)                                          # option index
         buf.uint8(int(opt.get("option_icon") or 0))            # icon
         buf.uint8(int(opt.get("box_coded") or 0))              # coded
-        buf.uint32(int(opt.get("box_money") or 0))             # money required
-        buf.cstring(str(opt.get("option_text") or ""))         # text
-        buf.cstring(str(opt.get("box_text") or ""))            # box text
+        buf.cstring(str(opt.get("option_text") or ""))         # message text
 
     buf.uint32(len(quests))
     for q in quests:
@@ -603,11 +601,10 @@ def _build_offer_reward(npc_guid: int, quest: dict) -> bytes:
         buf.uint32(rcount)
         buf.uint32(display)
 
-    # Reward money + trailing fields the client expects
+    # Reward money + trailing fields the client expects (per VMaNGOS GossipDef.cpp)
     buf.uint32(max(0, int(quest.get("RewOrReqMoney") or 0)))
-    buf.uint32(0)                                        # unused (honor)
+    buf.uint32(0)                                        # unused
     buf.uint32(int(quest.get("RewSpell") or 0))          # reward spell
-    buf.uint32(int(quest.get("RewSpellCast") or 0))      # reward spell cast
 
     return buf.bytes()
 
