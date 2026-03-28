@@ -854,7 +854,7 @@ def _do_creature_swing_inner(creature_guid: int):
 
     # Range check — creature must be close enough to hit
     px, py, _ = _get_player_pos(target_session)
-    cx, cy, _ = cs["pos_x"], cs["pos_y"]
+    cx, cy = cs["pos_x"], cs["pos_y"]
     if _dist_2d(px, py, cx, cy) > MELEE_RANGE * 1.5:
         # Out of range but chasing — skip this swing, try again later
         _schedule_creature_swing(creature_guid)
