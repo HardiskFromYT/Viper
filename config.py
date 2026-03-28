@@ -17,7 +17,8 @@ MODULES = [
     "items",
     "movement",    # movement packet handlers — silences log spam
     "world_data",  # MaNGOS world DB: creatures, quests, NPCs, teleports, loot
-    "combat",      # melee combat system
+    "combat",       # melee combat system
+    "npc_interact", # NPC gossip, vendors, quest givers, trainers
     "gm",
     "news",        # login-screen breaking-news HTTP server
 ]

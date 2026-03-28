@@ -205,6 +205,7 @@ _UNIT_MAXHEALTH   = 0x001C
 _UNIT_LEVEL       = 0x0022
 _UNIT_FACTION_T   = 0x0023
 _UNIT_BYTES_0     = 0x0024
+_UNIT_NPC_FLAGS   = 0x0025
 _UNIT_FLAGS       = 0x002E
 _UNIT_BOUNDING    = 0x0081
 _UNIT_COMBATREACH = 0x0082
@@ -233,6 +234,7 @@ def _build_creature_update(spawn_guid: int, template) -> bytes:
         _UNIT_MAXHEALTH:   hp,
         _UNIT_LEVEL:       level,
         _UNIT_FACTION_T:   template.get("FactionAlliance") or 14,
+        _UNIT_NPC_FLAGS:   int(template.get("NpcFlags") or 0),
         _UNIT_BOUNDING:    _f2i(0.389),
         _UNIT_COMBATREACH: _f2i(1.5),
         _UNIT_DISPLAYID:   model,
@@ -297,6 +299,7 @@ def build_creatures_packet(spawns, session=None) -> bytes | None:
             _UNIT_MAXHEALTH:   hp,
             _UNIT_LEVEL:       level,
             _UNIT_FACTION_T:   faction,
+            _UNIT_NPC_FLAGS:   int(tpl.get("NpcFlags") or 0),
             _UNIT_BYTES_0:     0,            # race/class/gender/power — 0 for NPCs
             _UNIT_BOUNDING:    _f2i(0.389),
             _UNIT_COMBATREACH: _f2i(1.5),

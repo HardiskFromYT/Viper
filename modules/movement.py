@@ -107,9 +107,6 @@ class Module(BaseModule):
         self.reg_packet(server, _CMSG_GAMEOBJECT_QUERY, self._on_gameobject_query)
         self.reg_packet(server, _CMSG_ITEM_QUERY_SINGLE, self._on_item_query)
 
-        # Questgiver status
-        self.reg_packet(server, _CMSG_QUESTGIVER_STATUS_QUERY, self._on_questgiver_status)
-
         log.info(f"movement loaded: {len(_MOVE_OPCODES)} movement + misc opcodes.")
 
     def on_unload(self, server):
