@@ -78,7 +78,12 @@ def get_creatures_near(map_id: int, x: float, y: float, radius: float = 200.0):
     return wdb().execute(
         """SELECT c.guid, c.id, c.position_x, c.position_y, c.position_z,
                   c.orientation, t.Name, t.MinLevel, t.MaxLevel,
-                  t.ModelId1, t.scale
+                  t.ModelId1, t.Scale,
+                  t.MinLevelHealth, t.MaxLevelHealth,
+                  t.MinMeleeDmg, t.MaxMeleeDmg, t.MeleeBaseAttackTime,
+                  t.MeleeAttackPower, t.Armor, t.DamageMultiplier,
+                  t.DamageVariance, t.FactionAlliance, t.NpcFlags,
+                  t.HealthMultiplier, t.UnitFlags
            FROM creature c
            JOIN creature_template t ON c.id = t.Entry
            WHERE c.map = ?
@@ -251,13 +256,23 @@ def _f2i(f):
     return struct.unpack("<I", struct.pack("<f", f))[0]
 
 
-def build_creatures_packet(spawns) -> bytes | None:
-    """Build a single SMSG_UPDATE_OBJECT containing all nearby creatures."""
+def build_creatures_packet(spawns, session=None) -> bytes | None:
+    """Build a single SMSG_UPDATE_OBJECT containing all nearby creatures.
+    If session is provided, filters out creatures the player shouldn't see
+    (e.g. Spirit Healers are only visible to ghost players)."""
     if not spawns:
         return None
 
     objects = []
     for spawn in spawns:
+        # Spirit Healer visibility filter
+        if session:
+            try:
+                from modules.combat import should_see_creature
+                if not should_see_creature(session, int(spawn["id"])):
+                    continue
+            except ImportError:
+                pass
         guid = spawn["guid"] + 0x100000000  # shift into creature GUID range
         tpl  = get_creature_template(spawn["id"])
         if not tpl:
@@ -385,6 +400,13 @@ def update_visibility(session):
     new_spawns = []
     for s in (spawns or []):
         guid = s["guid"] + 0x100000000
+        # Filter out creatures the player shouldn't see (e.g. Spirit Healers)
+        try:
+            from modules.combat import should_see_creature
+            if not should_see_creature(session, int(s["id"])):
+                continue
+        except ImportError:
+            pass
         near_guids.add(guid)
         if guid not in session._known_creatures:
             new_spawns.append(s)
@@ -394,7 +416,7 @@ def update_visibility(session):
     # Send new creatures
     if new_spawns:
         try:
-            pkt = build_creatures_packet(new_spawns)
+            pkt = build_creatures_packet(new_spawns, session=session)
             if pkt:
                 session._send(SMSG_UPDATE_OBJECT, pkt)
         except Exception as e:
@@ -564,11 +586,18 @@ class Module(BaseModule):
         try:
             spawns = get_creatures_near(map_id, x, y, radius=_VIS_SPAWN_RADIUS)
             if spawns:
-                pkt = build_creatures_packet(spawns)
+                pkt = build_creatures_packet(spawns, session=session)
                 if pkt:
                     session._send(SMSG_UPDATE_OBJECT, pkt)
                 for s in spawns:
                     guid = s["guid"] + 0x100000000
+                    # Track known creatures (skip spirit healers if alive)
+                    try:
+                        from modules.combat import should_see_creature
+                        if not should_see_creature(session, int(s["id"])):
+                            continue
+                    except ImportError:
+                        pass
                     session._known_creatures.add(guid)
                     session._known_positions[guid] = (
                         float(s["position_x"]), float(s["position_y"]))
@@ -616,11 +645,17 @@ class Module(BaseModule):
         try:
             spawns = get_creatures_near(map_id, x, y, radius=_VIS_SPAWN_RADIUS)
             if spawns:
-                pkt = build_creatures_packet(spawns)
+                pkt = build_creatures_packet(spawns, session=session)
                 if pkt:
                     session._send(SMSG_UPDATE_OBJECT, pkt)
                 for s in spawns:
                     guid = s["guid"] + 0x100000000
+                    try:
+                        from modules.combat import should_see_creature
+                        if not should_see_creature(session, int(s["id"])):
+                            continue
+                    except ImportError:
+                        pass
                     session._known_creatures.add(guid)
                     session._known_positions[guid] = (
                         float(s["position_x"]), float(s["position_y"]))

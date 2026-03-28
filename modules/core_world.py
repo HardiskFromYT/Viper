@@ -145,6 +145,56 @@ def _char_enum_packet(chars, db_path=None) -> bytes:
     return buf.bytes()
 
 
+# Power types per class (vanilla 1.12.1)
+_CLASS_POWER_TYPE = {
+    1: 1,   # Warrior → Rage
+    2: 0,   # Paladin → Mana
+    3: 0,   # Hunter → Mana
+    4: 3,   # Rogue → Energy
+    5: 0,   # Priest → Mana
+    7: 0,   # Shaman → Mana
+    8: 0,   # Mage → Mana
+    9: 0,   # Warlock → Mana
+    11: 0,  # Druid → Mana
+}
+
+
+def calc_player_stats(race: int, cls: int, level: int) -> dict:
+    """Calculate player HP/mana/stats from world.db level stats.
+    Returns dict with max_health, max_mana, power_type, str, agi, sta, int, spi."""
+    from modules.world_data import get_player_levelstats, get_class_levelstats
+    power_type = _CLASS_POWER_TYPE.get(cls, 0)
+
+    ls = get_player_levelstats(race, cls, level)
+    cs = get_class_levelstats(cls, level)
+
+    if ls and cs:
+        sta = int(ls["sta"])
+        inte = int(ls["inte"])
+        basehp = int(cs["basehp"])
+        basemana = int(cs["basemana"])
+        # Vanilla formula: first 20 stamina = 1 HP each, rest = 10 HP each
+        bonus_hp = (min(sta, 20) * 1) + (max(0, sta - 20) * 10)
+        max_health = basehp + bonus_hp
+        # Vanilla formula: first 20 intellect = 1 mana each, rest = 15 mana each
+        bonus_mana = (min(inte, 20) * 1) + (max(0, inte - 20) * 15)
+        max_mana = basemana + bonus_mana if power_type == 0 else 0
+        return {
+            "max_health": max_health,
+            "max_mana": max_mana,
+            "power_type": power_type,
+            "str": int(ls["str"]), "agi": int(ls["agi"]),
+            "sta": sta, "int": inte, "spi": int(ls["spi"]),
+        }
+    else:
+        # Fallback if world.db data missing
+        return {
+            "max_health": 100, "max_mana": 100 if power_type == 0 else 0,
+            "power_type": power_type,
+            "str": 10, "agi": 10, "sta": 10, "int": 10, "spi": 10,
+        }
+
+
 def _build_update_object(char, extra_fields=None, move_flags=0) -> bytes:
     guid = char["id"]
     race, cls, gender = char["race"], char["class"], char["gender"]
@@ -153,18 +203,22 @@ def _build_update_object(char, extra_fields=None, move_flags=0) -> bytes:
     def _f2i(f):
         return struct.unpack("<I", struct.pack("<f", f))[0]
 
+    stats = calc_player_stats(race, cls, char["level"])
+    from dbc import RACE_FACTION_TEMPLATE
+    faction_template = RACE_FACTION_TEMPLATE.get(race, 1)
+
     fields = {
         OBJECT_FIELD_GUID:          guid & 0xFFFFFFFF,
         OBJECT_FIELD_GUID + 1:      (guid >> 32) & 0xFFFFFFFF,
         OBJECT_FIELD_TYPE:          0x19,           # OBJECT | UNIT | PLAYER
         OBJECT_FIELD_SCALE_X:       _f2i(1.0),
-        UNIT_FIELD_HEALTH:          100,
-        UNIT_FIELD_POWER1:          100,            # mana
-        UNIT_FIELD_MAXHEALTH:       100,
-        UNIT_FIELD_MAXPOWER1:       100,            # max mana
+        UNIT_FIELD_HEALTH:          stats["max_health"],
+        UNIT_FIELD_POWER1:          stats["max_mana"],
+        UNIT_FIELD_MAXHEALTH:       stats["max_health"],
+        UNIT_FIELD_MAXPOWER1:       stats["max_mana"],
         UNIT_FIELD_LEVEL:           char["level"],
-        UNIT_FIELD_FACTIONTEMPLATE: 1,
-        UNIT_FIELD_BYTES_0:         race | (cls << 8) | (gender << 16) | (1 << 24),  # power type=mana
+        UNIT_FIELD_FACTIONTEMPLATE: faction_template,
+        UNIT_FIELD_BYTES_0:         race | (cls << 8) | (gender << 16) | (stats["power_type"] << 24),
         UNIT_FIELD_FLAGS:           0x00000008,     # UNIT_FLAG_PLAYER_CONTROLLED
         UNIT_FIELD_BOUNDINGRADIUS:  _f2i(0.389),
         UNIT_FIELD_COMBATREACH:     _f2i(1.5),
@@ -244,18 +298,22 @@ def build_other_player_object(char) -> bytes:
     def _f2i(f):
         return struct.unpack("<I", struct.pack("<f", f))[0]
 
+    stats = calc_player_stats(race, cls, char["level"])
+    from dbc import RACE_FACTION_TEMPLATE
+    faction_template = RACE_FACTION_TEMPLATE.get(race, 1)
+
     fields = {
         OBJECT_FIELD_GUID:          guid & 0xFFFFFFFF,
         OBJECT_FIELD_GUID + 1:      (guid >> 32) & 0xFFFFFFFF,
         OBJECT_FIELD_TYPE:          0x19,           # OBJECT | UNIT | PLAYER
         OBJECT_FIELD_SCALE_X:       _f2i(1.0),
-        UNIT_FIELD_HEALTH:          100,
-        UNIT_FIELD_POWER1:          100,
-        UNIT_FIELD_MAXHEALTH:       100,
-        UNIT_FIELD_MAXPOWER1:       100,
+        UNIT_FIELD_HEALTH:          stats["max_health"],
+        UNIT_FIELD_POWER1:          stats["max_mana"],
+        UNIT_FIELD_MAXHEALTH:       stats["max_health"],
+        UNIT_FIELD_MAXPOWER1:       stats["max_mana"],
         UNIT_FIELD_LEVEL:           char["level"],
-        UNIT_FIELD_FACTIONTEMPLATE: 1,
-        UNIT_FIELD_BYTES_0:         race | (cls << 8) | (gender << 16) | (1 << 24),
+        UNIT_FIELD_FACTIONTEMPLATE: faction_template,
+        UNIT_FIELD_BYTES_0:         race | (cls << 8) | (gender << 16) | (stats["power_type"] << 24),
         UNIT_FIELD_FLAGS:           0x00000008,     # UNIT_FLAG_PLAYER_CONTROLLED
         UNIT_FIELD_BOUNDINGRADIUS:  _f2i(0.389),
         UNIT_FIELD_COMBATREACH:     _f2i(1.5),
@@ -727,7 +785,22 @@ class Module(BaseModule):
             return
         session.char = char
         session.char_guid = guid
-        log.info(f"Player login: {char['name']} (GUID {guid})")
+        # Initialize combat stats on session
+        stats = calc_player_stats(char["race"], char["class"], char["level"])
+        session.health = stats["max_health"]
+        session.max_health = stats["max_health"]
+        session.mana = stats["max_mana"]
+        session.max_mana = stats["max_mana"]
+        session._attack_target = 0
+        session._attack_timer = None
+        session._in_combat = False
+        session._is_dead = False
+        session._is_ghost = False
+        session._corpse_x = 0.0
+        session._corpse_y = 0.0
+        session._corpse_z = 0.0
+        session._corpse_map = 0
+        log.info(f"Player login: {char['name']} (GUID {guid}) HP={session.max_health} MP={session.max_mana}")
         _send_login_packets(session, char)
 
     def _ping(self, session, payload: bytes):

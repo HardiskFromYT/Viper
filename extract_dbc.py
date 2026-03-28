@@ -262,6 +262,53 @@ def extract_emotes_text(raw, db):
     return n_records, len(rows)
 
 
+# ── FactionTemplate.dbc ────────────────────────────────────────────────────
+# Layout (vanilla 1.12.1, 56 bytes per record, 14 uint32 fields, no strings):
+#   uint32  ID
+#   uint32  Faction          (FK → Faction.dbc)
+#   uint32  Flags
+#   uint32  FactionGroup     (our group mask: 1=Player, 2=Alliance, 4=Horde, 8=Monster)
+#   uint32  FriendGroup      (groups we are friendly to)
+#   uint32  EnemyGroup       (groups we are hostile to)
+#   uint32  EnemyFaction[4]  (specific Faction.dbc IDs we hate)
+#   uint32  FriendFaction[4] (specific Faction.dbc IDs we like)
+
+def extract_faction_template(raw, db):
+    """Parse FactionTemplate.dbc and insert into dbc.db."""
+    n_records, n_fields, record_size, _, data_off = parse_dbc_header(raw)
+
+    db.execute("DROP TABLE IF EXISTS faction_template")
+    db.execute("""
+        CREATE TABLE faction_template (
+            id              INTEGER PRIMARY KEY,
+            faction         INTEGER NOT NULL,
+            flags           INTEGER NOT NULL,
+            faction_group   INTEGER NOT NULL,
+            friend_group    INTEGER NOT NULL,
+            enemy_group     INTEGER NOT NULL,
+            enemy_faction1  INTEGER NOT NULL DEFAULT 0,
+            enemy_faction2  INTEGER NOT NULL DEFAULT 0,
+            enemy_faction3  INTEGER NOT NULL DEFAULT 0,
+            enemy_faction4  INTEGER NOT NULL DEFAULT 0,
+            friend_faction1 INTEGER NOT NULL DEFAULT 0,
+            friend_faction2 INTEGER NOT NULL DEFAULT 0,
+            friend_faction3 INTEGER NOT NULL DEFAULT 0,
+            friend_faction4 INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+
+    rows = []
+    for i in range(n_records):
+        off = data_off + i * record_size
+        fields = struct.unpack_from("<14I", raw, off)
+        rows.append(fields)
+
+    db.executemany(
+        "INSERT INTO faction_template VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows
+    )
+    return n_records, len(rows)
+
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 DBC_EXTRACTORS = {
@@ -270,6 +317,7 @@ DBC_EXTRACTORS = {
     "ChrRaces.dbc":        ("ChrRaces",        extract_chr_races),
     "ChrClasses.dbc":      ("ChrClasses",      extract_chr_classes),
     "EmotesText.dbc":      ("EmotesText",      extract_emotes_text),
+    "FactionTemplate.dbc": ("FactionTemplate", extract_faction_template),
 }
 
 

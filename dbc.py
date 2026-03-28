@@ -92,3 +92,98 @@ _INVTYPE_TO_SLOT = {
 def invtype_to_slot(inv_type: int) -> int:
     """Convert DBC inventory type to equipment slot index. Returns -1 for non-equippable."""
     return _INVTYPE_TO_SLOT.get(inv_type, -1)
+
+
+# ── FactionTemplate ──────────────────────────────────────────────────────────
+
+_ft_cache: dict[int, dict] | None = None
+
+
+def _load_faction_templates():
+    global _ft_cache
+    if _ft_cache is not None:
+        return
+    _ft_cache = {}
+    try:
+        rows = _db().execute("SELECT * FROM faction_template").fetchall()
+        for r in rows:
+            _ft_cache[r["id"]] = {
+                "id": r["id"],
+                "faction": r["faction"],
+                "flags": r["flags"],
+                "faction_group": r["faction_group"],
+                "friend_group": r["friend_group"],
+                "enemy_group": r["enemy_group"],
+                "enemy_factions": [r["enemy_faction1"], r["enemy_faction2"],
+                                   r["enemy_faction3"], r["enemy_faction4"]],
+                "friend_factions": [r["friend_faction1"], r["friend_faction2"],
+                                    r["friend_faction3"], r["friend_faction4"]],
+            }
+        log.info(f"Loaded {len(_ft_cache)} faction templates from dbc.db")
+    except Exception as e:
+        log.warning(f"Failed to load FactionTemplate from dbc.db: {e}")
+
+
+def get_faction_template(ft_id: int) -> dict | None:
+    """Get a faction template by ID."""
+    _load_faction_templates()
+    return _ft_cache.get(ft_id)
+
+
+# Player faction template IDs per race
+RACE_FACTION_TEMPLATE = {
+    1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 115, 8: 116,
+}
+
+
+def is_hostile(ft_a: dict, ft_b: dict) -> bool:
+    """Check if faction template A is hostile to faction template B.
+    Uses the CMaNGOS hostility algorithm."""
+    if ft_b["faction"]:
+        if ft_b["faction"] in ft_a["enemy_factions"]:
+            return True
+        if ft_b["faction"] in ft_a["friend_factions"]:
+            return False
+    return (ft_a["enemy_group"] & ft_b["faction_group"]) != 0
+
+
+def is_hostile_to_player(creature_ft_id: int, player_race: int) -> bool:
+    """Check if a creature's faction template is hostile to a player of given race."""
+    _load_faction_templates()
+    creature_ft = _ft_cache.get(creature_ft_id)
+    player_ft_id = RACE_FACTION_TEMPLATE.get(player_race, 1)
+    player_ft = _ft_cache.get(player_ft_id)
+    if not creature_ft or not player_ft:
+        return False
+    return is_hostile(creature_ft, player_ft)
+
+
+def is_attackable_by_player(creature_ft_id: int, player_race: int) -> bool:
+    """Check if a player can attack a creature (right-click attack).
+    This is broader than is_hostile — includes passive mobs like wolves
+    that don't aggro but ARE attackable. Only truly friendly/allied units
+    (same faction group, or explicitly friendly) are non-attackable."""
+    _load_faction_templates()
+    creature_ft = _ft_cache.get(creature_ft_id)
+    player_ft_id = RACE_FACTION_TEMPLATE.get(player_race, 1)
+    player_ft = _ft_cache.get(player_ft_id)
+    if not creature_ft or not player_ft:
+        return False
+    # If explicitly hostile, always attackable
+    if is_hostile(creature_ft, player_ft):
+        return True
+    # If explicitly friendly, NOT attackable
+    if is_friendly(creature_ft, player_ft):
+        return False
+    # Otherwise (neutral) — attackable
+    return True
+
+
+def is_friendly(ft_a: dict, ft_b: dict) -> bool:
+    """Check if faction template A is friendly to faction template B."""
+    if ft_b["faction"]:
+        if ft_b["faction"] in ft_a["enemy_factions"]:
+            return False
+        if ft_b["faction"] in ft_a["friend_factions"]:
+            return True
+    return (ft_a["friend_group"] & ft_b["faction_group"]) != 0
