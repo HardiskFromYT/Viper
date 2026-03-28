@@ -557,15 +557,21 @@ def _build_offer_reward(npc_guid: int, quest: dict) -> bytes:
     buf.uint32(int(quest["entry"]))
     buf.cstring(str(quest.get("Title") or "Quest"))
     buf.cstring(str(quest.get("OfferRewardText") or "Well done!"))
-    buf.uint32(1)  # auto_finish = no
+    buf.uint32(1)  # enable_next
 
-    # Emotes (4 slots)
-    buf.uint32(4)
-    for i in range(4):
-        buf.uint32(0)  # emote delay
-        buf.uint32(0)  # emote id
+    # Emotes — count non-zero, then write only those
+    emote_count = 0
+    for i in range(1, 5):
+        if int(quest.get(f"OfferRewardEmote{i}") or 0):
+            emote_count += 1
+        else:
+            break  # MaNGOS breaks on first zero
+    buf.uint32(emote_count)
+    for i in range(1, emote_count + 1):
+        buf.uint32(int(quest.get(f"OfferRewardEmoteDelay{i}") or 0))
+        buf.uint32(int(quest.get(f"OfferRewardEmote{i}") or 0))
 
-    # Reward choice items
+    # Reward choice items (dynamic count)
     choice_items = []
     for i in range(1, 7):
         rid = int(quest.get(f"RewChoiceItemId{i}") or 0)
@@ -581,7 +587,7 @@ def _build_offer_reward(npc_guid: int, quest: dict) -> bytes:
         buf.uint32(rcount)
         buf.uint32(display)
 
-    # Reward items (guaranteed)
+    # Reward items (dynamic count)
     reward_items = []
     for i in range(1, 5):
         rid = int(quest.get(f"RewItemId{i}") or 0)
@@ -597,8 +603,11 @@ def _build_offer_reward(npc_guid: int, quest: dict) -> bytes:
         buf.uint32(rcount)
         buf.uint32(display)
 
-    # Reward money
+    # Reward money + trailing fields the client expects
     buf.uint32(max(0, int(quest.get("RewOrReqMoney") or 0)))
+    buf.uint32(0)                                        # unused (honor)
+    buf.uint32(int(quest.get("RewSpell") or 0))          # reward spell
+    buf.uint32(int(quest.get("RewSpellCast") or 0))      # reward spell cast
 
     return buf.bytes()
 
@@ -616,18 +625,16 @@ def _build_quest_complete(quest: dict) -> bytes:
         xp = qlevel * 50
     buf.uint32(xp)
     buf.uint32(max(0, int(quest.get("RewOrReqMoney") or 0)))
-    # Reward items
+    buf.uint32(0)  # bonus honor
+    # Reward items — always write all 4 slots
     reward_count = 0
     for i in range(1, 5):
         if int(quest.get(f"RewItemId{i}") or 0):
             reward_count += 1
     buf.uint32(reward_count)
     for i in range(1, 5):
-        rid = int(quest.get(f"RewItemId{i}") or 0)
-        rcount = int(quest.get(f"RewItemCount{i}") or 0)
-        if rid:
-            buf.uint32(rid)
-            buf.uint32(rcount)
+        buf.uint32(int(quest.get(f"RewItemId{i}") or 0))
+        buf.uint32(int(quest.get(f"RewItemCount{i}") or 0))
     return buf.bytes()
 
 
