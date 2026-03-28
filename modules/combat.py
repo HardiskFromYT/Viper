@@ -1262,8 +1262,8 @@ def _handle_reclaim_corpse(session, payload: bytes):
         session.send_sys_msg(f"You are too far from your corpse ({dist:.0f} yards). Get closer!")
         return
 
-    # Resurrect at corpse location
-    _player_resurrect_at(session, cx, cy, cz)
+    # Resurrect at current position (player is already near corpse, no teleport needed)
+    _player_resurrect_at(session, px, py, pz)
 
 
 def _player_resurrect_at(session, x: float, y: float, z: float):
@@ -1308,11 +1308,7 @@ def _player_resurrect_at(session, x: float, y: float, z: float):
     # Clear corpse query (no corpse anymore)
     session._send(MSG_CORPSE_QUERY, struct.pack("<B", 0))
 
-    # Teleport back to corpse
-    from modules.core_world import teleport_player
-    teleport_player(session, session.char["map"], x, y, z, 0.0)
-
-    log.info(f"Player {session.char['name']} resurrected at corpse ({x:.0f},{y:.0f},{z:.0f}) "
+    log.info(f"Player {session.char['name']} resurrected at ({x:.0f},{y:.0f},{z:.0f}) "
              f"with {session.health} HP")
     session.send_sys_msg("You have been resurrected!")
 
