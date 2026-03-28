@@ -16,7 +16,8 @@ from opcodes import (CMSG_CHAR_ENUM, SMSG_CHAR_ENUM,
                      CMSG_PING, SMSG_PONG,
                      CMSG_NAME_QUERY, SMSG_NAME_QUERY_RESPONSE,
                      SMSG_NEW_WORLD, SMSG_TRANSFER_PENDING,
-                     MSG_MOVE_WORLDPORT_ACK, MSG_MOVE_TELEPORT_ACK)
+                     MSG_MOVE_WORLDPORT_ACK, MSG_MOVE_TELEPORT_ACK,
+                     SMSG_TIME_SYNC_REQ)
 from packets import ByteBuffer, pack_guid, build_server_packet
 from database import (get_account, get_characters, create_character,
                       delete_character, get_character_by_guid,
@@ -193,7 +194,7 @@ def _build_update_object(char, extra_fields=None, move_flags=0) -> bytes:
     # Movement block
     mv = ByteBuffer()
     mv.uint32(move_flags)                              # move flags
-    mv.uint32(int(time.time() * 1000) & 0xFFFFFFFF)  # timestamp
+    mv.uint32(0)                                      # timestamp (0 = no prior movement)
     mv.float32(char["pos_x"]); mv.float32(char["pos_y"])
     mv.float32(char["pos_z"]); mv.float32(char["orientation"])
     mv.uint32(0)          # fall time
@@ -229,6 +230,90 @@ def _build_update_object(char, extra_fields=None, move_flags=0) -> bytes:
     pkt.uint32(1)   # count
     pkt.uint8(0)    # has_transport
     pkt.uint8(3)    # update_type: CREATE_OBJECT2
+    pkt.raw(obj.bytes())
+    return pkt.bytes()
+
+
+def build_other_player_object(char) -> bytes:
+    """Build SMSG_UPDATE_OBJECT CREATE_OBJECT for another player (not self).
+    Uses update_type=2 (CREATE_OBJECT) and flags without SELF bit."""
+    guid = char["id"]
+    race, cls, gender = char["race"], char["class"], char["gender"]
+    display = RACE_DISPLAY.get(race, (49, 50))[gender & 1]
+
+    def _f2i(f):
+        return struct.unpack("<I", struct.pack("<f", f))[0]
+
+    fields = {
+        OBJECT_FIELD_GUID:          guid & 0xFFFFFFFF,
+        OBJECT_FIELD_GUID + 1:      (guid >> 32) & 0xFFFFFFFF,
+        OBJECT_FIELD_TYPE:          0x19,           # OBJECT | UNIT | PLAYER
+        OBJECT_FIELD_SCALE_X:       _f2i(1.0),
+        UNIT_FIELD_HEALTH:          100,
+        UNIT_FIELD_POWER1:          100,
+        UNIT_FIELD_MAXHEALTH:       100,
+        UNIT_FIELD_MAXPOWER1:       100,
+        UNIT_FIELD_LEVEL:           char["level"],
+        UNIT_FIELD_FACTIONTEMPLATE: 1,
+        UNIT_FIELD_BYTES_0:         race | (cls << 8) | (gender << 16) | (1 << 24),
+        UNIT_FIELD_FLAGS:           0x00000008,     # UNIT_FLAG_PLAYER_CONTROLLED
+        UNIT_FIELD_BOUNDINGRADIUS:  _f2i(0.389),
+        UNIT_FIELD_COMBATREACH:     _f2i(1.5),
+        UNIT_FIELD_DISPLAYID:       display,
+        UNIT_FIELD_NATIVEDISPLAYID: display,
+        PLAYER_BYTES:               (char["skin"] | (char["face"] << 8) |
+                                     (char["hair_style"] << 16) | (char["hair_color"] << 24)),
+        PLAYER_BYTES_2:             char["facial"],
+        PLAYER_BYTES_3:             gender,
+    }
+
+    # Visible equipment
+    from dbc import invtype_to_slot
+    gear = _get_starter_gear(race, cls)
+    for item_id, _display, inv_type in gear:
+        equip_slot = invtype_to_slot(inv_type)
+        if 0 <= equip_slot <= 18:
+            fields[PLAYER_VISIBLE_ITEM_1_0 + equip_slot * _VISIBLE_ITEM_STRIDE] = item_id
+
+    # Movement block
+    mv = ByteBuffer()
+    mv.uint32(0)                                     # move flags
+    mv.uint32(0)                                     # timestamp (0 = no prior movement)
+    mv.float32(char["pos_x"]); mv.float32(char["pos_y"])
+    mv.float32(char["pos_z"]); mv.float32(char["orientation"])
+    mv.uint32(0)          # fall time
+    mv.float32(2.5)       # walk speed
+    mv.float32(7.0)       # run speed
+    mv.float32(4.5)       # run back
+    mv.float32(4.722222)  # swim
+    mv.float32(2.5)       # swim back
+    mv.float32(3.141593)  # turn rate
+
+    # Bitmask + field data
+    max_field = max(fields.keys()) + 1
+    num_blocks = (max_field + 31) // 32
+    mask_words = [0] * num_blocks
+    field_data = bytearray()
+    for idx in sorted(fields):
+        mask_words[idx // 32] |= (1 << (idx % 32))
+    for idx in sorted(fields):
+        field_data += struct.pack("<I", fields[idx] & 0xFFFFFFFF)
+
+    obj = ByteBuffer()
+    obj.raw(pack_guid(guid))
+    obj.uint8(4)               # object type: PLAYER
+    obj.uint8(0x70)            # update flags: ALL|LIVING|HAS_POSITION (no SELF)
+    obj.raw(mv.bytes())
+    obj.uint32(1)              # UPDATEFLAG_ALL data
+    obj.uint8(num_blocks)
+    for w in mask_words:
+        obj.uint32(w)
+    obj.raw(field_data)
+
+    pkt = ByteBuffer()
+    pkt.uint32(1)   # count
+    pkt.uint8(0)    # has_transport
+    pkt.uint8(3)    # update_type: CREATE_OBJECT2 (required for movement interpolation)
     pkt.raw(obj.bytes())
     return pkt.bytes()
 
@@ -494,6 +579,11 @@ def _send_world_init_packets(session, char, is_login=False):
         except Exception as e:
             log.warning(f"Failed to send inventory items: {e}")
 
+    # Time sync request — vanilla client needs this for movement interpolation
+    session._time_sync_counter = getattr(session, "_time_sync_counter", 0)
+    session._send(SMSG_TIME_SYNC_REQ, struct.pack("<I", session._time_sync_counter))
+    session._time_sync_counter += 1
+
     if is_login:
         b = ByteBuffer(); b.uint32(1); b.cstring("Welcome to TestEmu!")
         session._send(SMSG_MOTD, b.bytes())
@@ -528,7 +618,7 @@ def teleport_player(session, map_id: int, x: float, y: float, z: float, o: float
         buf.raw(pack_guid(guid))
         buf.uint32(0)                                       # counter
         buf.uint32(0)                                       # move flags
-        buf.uint32(int(time.time() * 1000) & 0xFFFFFFFF)   # timestamp
+        buf.uint32(getattr(session, "_last_move_time", 0))   # timestamp in client domain
         buf.float32(x)
         buf.float32(y)
         buf.float32(z)
@@ -643,6 +733,8 @@ class Module(BaseModule):
     def _ping(self, session, payload: bytes):
         # CMSG_PING: uint32 ping_id + uint32 latency
         ping_id = struct.unpack_from("<I", payload, 0)[0] if len(payload) >= 4 else 0
+        if len(payload) >= 8:
+            session.latency = struct.unpack_from("<I", payload, 4)[0]
         session._send(SMSG_PONG, struct.pack("<I", ping_id))
 
     def _name_query(self, session, payload: bytes):

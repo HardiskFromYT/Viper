@@ -17,7 +17,8 @@ import struct
 import time
 
 from modules.base import BaseModule
-from opcodes import SMSG_UPDATE_OBJECT, SMSG_MOTD, MSG_MOVE_WORLDPORT_ACK, MSG_MOVE_TELEPORT_ACK
+from opcodes import (SMSG_UPDATE_OBJECT, SMSG_DESTROY_OBJECT, SMSG_MOTD,
+                     MSG_MOVE_WORLDPORT_ACK, MSG_MOVE_TELEPORT_ACK)
 from packets import ByteBuffer, pack_guid
 
 log = logging.getLogger("world_data")
@@ -300,7 +301,7 @@ def build_creatures_packet(spawns) -> bytes | None:
         # Movement block
         mv = ByteBuffer()
         mv.uint32(0)   # move flags
-        mv.uint32(int(time.time() * 1000) & 0xFFFFFFFF)
+        mv.uint32(0)  # timestamp (creatures are static, no prior movement)
         mv.float32(float(spawn["position_x"]))
         mv.float32(float(spawn["position_y"]))
         mv.float32(float(spawn["position_z"]))
@@ -423,6 +424,84 @@ def update_visibility(session):
     session._spawn_center = (map_id, px, py)
 
 
+# ── Player-to-player visibility ──────────────────────────────────────────────
+
+def _init_known_players(session):
+    """Initialise per-session player visibility tracking."""
+    if not hasattr(session, "_known_players"):
+        session._known_players = set()   # player GUIDs we've sent CREATE for
+
+
+def send_nearby_players(session, server):
+    """Send CREATE_OBJECT for all other online players to this session,
+    and send this session's CREATE_OBJECT to all other players."""
+    from modules.core_world import build_other_player_object
+    _init_known_players(session)
+    char = session.char
+    if not char:
+        return
+
+    for other in server.get_online_players():
+        if other is session or not other.char:
+            continue
+        other_char = other.char
+        _init_known_players(other)
+
+        # Send the other player to us
+        if other_char["id"] not in session._known_players:
+            try:
+                session._send(SMSG_UPDATE_OBJECT,
+                              build_other_player_object(other_char))
+                session._known_players.add(other_char["id"])
+            except Exception as e:
+                log.debug(f"Error sending player {other_char['name']} to {char['name']}: {e}")
+
+        # Send us to the other player
+        if char["id"] not in other._known_players:
+            try:
+                other._send(SMSG_UPDATE_OBJECT,
+                            build_other_player_object(char))
+                other._known_players.add(char["id"])
+            except Exception as e:
+                log.debug(f"Error sending player {char['name']} to {other_char['name']}: {e}")
+
+
+def destroy_player_for_others(session, server):
+    """Send SMSG_DESTROY_OBJECT for this player to all other sessions."""
+    if not session.char:
+        return
+    guid = session.char["id"]
+    data = struct.pack("<Q", guid)
+    for other in server.get_online_players():
+        if other is session or not other.char:
+            continue
+        try:
+            other._send(SMSG_DESTROY_OBJECT, data)
+            if hasattr(other, "_known_players"):
+                other._known_players.discard(guid)
+        except Exception:
+            pass
+
+
+def broadcast_movement(session, opcode, payload):
+    """Forward a movement packet from one player to all other nearby players.
+    Format: PackedGUID + raw MovementInfo (client payload forwarded as-is)."""
+    if not session.char:
+        return
+    guid = session.char["id"]
+    data = pack_guid(guid) + payload
+    server = getattr(session, "server", None)
+    if not server:
+        return
+    for other in server.get_online_players():
+        if other is session or not other.char:
+            continue
+        try:
+            other._send(opcode, data)
+        except Exception:
+            pass
+
+
 # ── Module ────────────────────────────────────────────────────────────────────
 
 class Module(BaseModule):
@@ -497,6 +576,12 @@ class Module(BaseModule):
         except Exception as e:
             log.error(f"Error sending creatures: {e}")
 
+        # Send other online players and announce ourselves to them
+        try:
+            send_nearby_players(session, self._server)
+        except Exception as e:
+            log.debug(f"Error sending nearby players: {e}")
+
         # Send MOTD with world info
         try:
             count_c = wdb().execute("SELECT COUNT(*) FROM creature").fetchone()[0]
@@ -543,6 +628,14 @@ class Module(BaseModule):
                           f"{char['name']} at map={map_id} ({x:.0f},{y:.0f})")
         except Exception as e:
             log.error(f"Error sending creatures after teleport: {e}")
+
+        # Refresh player visibility after teleport
+        try:
+            _init_known_players(session)
+            session._known_players.clear()
+            send_nearby_players(session, self._server)
+        except Exception as e:
+            log.debug(f"Error refreshing player visibility after teleport: {e}")
 
     # ── CLI ───────────────────────────────────────────────────────────
 

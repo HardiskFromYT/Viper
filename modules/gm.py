@@ -173,6 +173,8 @@ class Module(BaseModule):
                     help_text=".fly <on|off>  — toggle GM flight (swim in air)", min_gm=1)
         self.reg_gm(server, "gold",      self._cmd_gold,
                     help_text=".gold <amount|cap|reset>  — add gold (e.g. 1g27s19c)", min_gm=1)
+        self.reg_gm(server, "testmove", self._cmd_testmove,
+                    help_text=".testmove  — diagnostic: send a fake movement packet for you to all others", min_gm=1)
 
         log.info("gm loaded.")
 
@@ -412,7 +414,7 @@ class Module(BaseModule):
         buf = ByteBuffer()
         buf.raw(pack_guid(guid))
         buf.uint32(move_flags)
-        buf.uint32(int(time.time() * 1000) & 0xFFFFFFFF)  # timestamp
+        buf.uint32(getattr(session, "_last_move_time", 0))  # timestamp in client domain
         buf.float32(float(char["pos_x"]))
         buf.float32(float(char["pos_y"]))
         buf.float32(float(char["pos_z"]))
@@ -534,6 +536,47 @@ class Module(BaseModule):
             session.send_sys_msg(f"Gold set to {g}g {s}s {c}c.")
         else:
             session.send_sys_msg(f"Set {char_name}'s gold to {g}g {s}s {c}c.")
+
+
+    def _cmd_testmove(self, session, args):
+        """Diagnostic: send a hardcoded MSG_MOVE_HEARTBEAT for this player
+        to all other players, with position offset by 10 yards on X axis.
+        If other players see you teleport 10 yards, MSG_MOVE_* packets work.
+        If nothing happens, the client isn't processing our movement packets."""
+        if not session.char:
+            send_sys_msg(session, "No character loaded.")
+            return
+        guid = session.char["id"]
+        x = float(session.char["pos_x"]) + 10.0  # offset 10 yards
+        y = float(session.char["pos_y"])
+        z = float(session.char["pos_z"])
+        o = float(session.char["orientation"])
+
+        # Build a MSG_MOVE_HEARTBEAT body: PackedGUID + MovementInfo
+        # Use the last real client timestamp (timeGetTime domain), NOT epoch time!
+        client_time = getattr(session, "_last_move_time", 0)
+        buf = ByteBuffer()
+        buf.uint32(0)            # moveFlags = 0 (standing)
+        buf.uint32(client_time)  # timestamp in client's timeGetTime() domain
+        buf.float32(x)
+        buf.float32(y)
+        buf.float32(z)
+        buf.float32(o)
+        buf.uint32(0)  # fallTime
+
+        move_data = pack_guid(guid) + buf.bytes()
+
+        MSG_MOVE_HEARTBEAT = 0x0EE
+        sent = 0
+        for other in self._server.get_online_players():
+            if other is session or not other.char:
+                continue
+            other._send(MSG_MOVE_HEARTBEAT, move_data)
+            sent += 1
+
+        log.info(f"testmove: sent HB for guid={guid} to {sent} players, "
+                 f"pos=({x:.1f},{y:.1f},{z:.1f}), data_hex={move_data.hex()}")
+        send_sys_msg(session, f"Sent test heartbeat to {sent} players (+10 yards X)")
 
 
 def _parse_gold(text: str) -> int | None:

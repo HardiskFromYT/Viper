@@ -33,6 +33,12 @@ class WorldSession(asyncio.Protocol):
 
     def connection_made(self, transport):
         self.transport = transport
+        # Disable Nagle's algorithm so movement packets are sent immediately
+        # instead of being batched — critical for smooth other-player movement
+        sock = transport.get_extra_info('socket')
+        if sock:
+            import socket
+            sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         peer = transport.get_extra_info('peername')
         log.info(f"World connection from {peer}")
         # WoW 1.12.1: payload is just the 4-byte seed (no uint32(1) prefix — that's 3.3.5+)

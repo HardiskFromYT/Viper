@@ -20,6 +20,9 @@ _MOVE_OPCODES = [
     0x319,  # MSG_MOVE_TIME_SKIPPED
 ]
 
+# MSG_MOVE_TIME_SKIPPED is client-internal timing, never broadcast
+_NO_BROADCAST = {0x319}
+
 # Opcodes we silently consume (no processing needed)
 _SILENT_OPCODES = [
     0x0B4,  # CMSG_AREATRIGGER
@@ -29,8 +32,9 @@ _SILENT_OPCODES = [
     0x391,  # CMSG_TIME_SYNC_RESP
 ]
 
-# How often to persist position to DB (every N heartbeats)
-_SAVE_INTERVAL = 20
+# How often to persist position to DB (every N movement packets)
+# High value = less disk IO blocking the event loop, smoother movement
+_SAVE_INTERVAL = 500
 
 # Visibility: check every N movement packets, re-query if moved > threshold
 _VIS_CHECK_INTERVAL = 10
@@ -80,9 +84,9 @@ class Module(BaseModule):
         self._server = server
         self._heartbeat_count = {}
 
-        # Movement opcodes
+        # Movement opcodes — each gets a closure so we can broadcast with the opcode
         for opcode in _MOVE_OPCODES:
-            self.reg_packet(server, opcode, self._on_move)
+            self.reg_packet(server, opcode, self._make_move_handler(opcode))
 
         # Silent consumers
         for opcode in _SILENT_OPCODES:
@@ -113,7 +117,13 @@ class Module(BaseModule):
 
     # ── Movement ──────────────────────────────────────────────────────
 
-    def _on_move(self, session, payload: bytes):
+    def _make_move_handler(self, opcode):
+        """Create a movement handler closure that knows its opcode for broadcasting."""
+        def handler(session, payload):
+            self._on_move(session, opcode, payload)
+        return handler
+
+    def _on_move(self, session, opcode, payload: bytes):
         if not session.char:
             return
         # During fly mode activation, briefly reject client movement to prevent
@@ -122,6 +132,19 @@ class Module(BaseModule):
         reject_until = getattr(session, "_fly_reject_until", 0)
         if reject_until and _time.time() < reject_until:
             return
+
+        # Store the last client timestamp for other modules to use
+        if len(payload) >= 8:
+            session._last_move_time = struct.unpack_from("<I", payload, 4)[0]
+
+        # Broadcast to other players (all movement opcodes, as MaNGOS does)
+        if opcode not in _NO_BROADCAST:
+            try:
+                from modules.world_data import broadcast_movement
+                broadcast_movement(session, opcode, payload)
+            except Exception as e:
+                log.error(f"broadcast_movement FAILED: {e}", exc_info=True)
+
         pos = _parse_movement(payload)
         if not pos:
             return
@@ -180,6 +203,13 @@ class Module(BaseModule):
                                      c["pos_z"], c["orientation"])
             except Exception:
                 pass
+
+        # Remove this player's model from all other clients
+        try:
+            from modules.world_data import destroy_player_for_others
+            destroy_player_for_others(session, self._server)
+        except Exception:
+            pass
 
         # Send SMSG_LOGOUT_RESPONSE: reason=0 (success), instant=1
         buf = ByteBuffer()
