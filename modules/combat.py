@@ -54,8 +54,13 @@ SPIRIT_HEALER_ENTRY = 6491
 UNIT_FIELD_HEALTH    = 0x0016
 UNIT_FIELD_MAXHEALTH = 0x001C
 UNIT_FIELD_TARGET    = 0x0012  # 2 fields (GUID low + high)
+UNIT_FIELD_DISPLAYID = 0x0083
+UNIT_FIELD_NATIVEDID = 0x0084
 UNIT_FIELD_BYTES_1   = 0x00A1  # stand state / death state
 PLAYER_FLAGS         = 0x00BE  # player-specific flags field
+
+# Ghost display model
+GHOST_DISPLAY_ID     = 10045   # wisp/ghost model for all races
 
 # HitInfo flags for SMSG_ATTACKERSTATEUPDATE (1.12.1 / post-1.9.4)
 HITINFO_NORMALSWING    = 0x00000000
@@ -427,6 +432,26 @@ def _build_player_flags_update(guid: int, flags: int) -> bytes:
     for w in mask_words:
         buf.uint32(w)
     buf.uint32(flags)
+
+    return buf.bytes()
+
+
+def _build_displayid_update(guid: int, display_id: int) -> bytes:
+    """Build partial UPDATE_OBJECT setting UNIT_FIELD_DISPLAYID."""
+    buf = ByteBuffer()
+    buf.uint32(1)      # count
+    buf.uint8(0)       # has_transport
+    buf.uint8(0)       # UPDATETYPE_VALUES
+    buf.raw(pack_guid(guid))
+
+    num_blocks = (UNIT_FIELD_DISPLAYID // 32) + 1
+    mask_words = [0] * num_blocks
+    mask_words[UNIT_FIELD_DISPLAYID // 32] |= (1 << (UNIT_FIELD_DISPLAYID % 32))
+
+    buf.uint8(num_blocks)
+    for w in mask_words:
+        buf.uint32(w)
+    buf.uint32(display_id)
 
     return buf.bytes()
 
@@ -1164,6 +1189,11 @@ def _handle_repop_request(session, payload: bytes):
     session._is_ghost = True
     session.health = session.max_health  # Ghosts have full HP bar
 
+    # Save original display ID for restoration on resurrect
+    from modules.core_world import RACE_DISPLAY
+    race, gender = session.char["race"], session.char["gender"]
+    session._original_display_id = RACE_DISPLAY.get(race, (49, 50))[gender & 1]
+
     # Send alive update (ghost is technically "alive" with ghost flag)
     nearby = _get_nearby_sessions(session)
     pkt = _build_alive_update(player_guid, session.max_health)
@@ -1173,6 +1203,12 @@ def _handle_repop_request(session, payload: bytes):
 
     # Set PLAYER_FLAGS_GHOST
     pkt = _build_player_flags_update(player_guid, PLAYER_FLAG_GHOST)
+    for s in nearby:
+        try: s._send(SMSG_UPDATE_OBJECT, pkt)
+        except Exception: pass
+
+    # Set ghost display model (wisp)
+    pkt = _build_displayid_update(player_guid, GHOST_DISPLAY_ID)
     for s in nearby:
         try: s._send(SMSG_UPDATE_OBJECT, pkt)
         except Exception: pass
@@ -1193,8 +1229,13 @@ def _handle_repop_request(session, payload: bytes):
 def _handle_reclaim_corpse(session, payload: bytes):
     """Handle CMSG_RECLAIM_CORPSE — player wants to resurrect at corpse."""
     if not session.char:
+        log.warning("RECLAIM_CORPSE: no char")
         return
-    if not getattr(session, "_is_ghost", False):
+    is_ghost = getattr(session, "_is_ghost", False)
+    is_dead = getattr(session, "_is_dead", False)
+    log.info(f"RECLAIM_CORPSE: ghost={is_ghost} dead={is_dead}")
+    if not is_ghost:
+        log.warning("RECLAIM_CORPSE: not a ghost, ignoring")
         return
 
     # Check distance to corpse
@@ -1204,6 +1245,7 @@ def _handle_reclaim_corpse(session, payload: bytes):
     cz = getattr(session, "_corpse_z", pz)
 
     dist = _dist_2d(px, py, cx, cy)
+    log.info(f"RECLAIM_CORPSE: player=({px:.0f},{py:.0f}) corpse=({cx:.0f},{cy:.0f}) dist={dist:.0f}")
     if dist > CORPSE_RECLAIM_RANGE:
         session.send_sys_msg(f"You are too far from your corpse ({dist:.0f} yards). Get closer!")
         return
@@ -1225,18 +1267,30 @@ def _player_resurrect_at(session, x: float, y: float, z: float):
     session.health = max(1, session.max_health // 2)  # Resurrect with 50% HP
     session.mana = session.max_mana
 
-    # Clear PLAYER_FLAGS_GHOST
     nearby = _get_nearby_sessions(session)
+
+    # Clear PLAYER_FLAGS_GHOST
     pkt = _build_player_flags_update(player_guid, 0)
     for s in nearby:
         try: s._send(SMSG_UPDATE_OBJECT, pkt)
         except Exception: pass
+
+    # Restore original display model
+    original_display = getattr(session, "_original_display_id", None)
+    if original_display:
+        pkt = _build_displayid_update(player_guid, original_display)
+        for s in nearby:
+            try: s._send(SMSG_UPDATE_OBJECT, pkt)
+            except Exception: pass
 
     # Send health update
     pkt = _build_alive_update(player_guid, session.health)
     for s in nearby:
         try: s._send(SMSG_UPDATE_OBJECT, pkt)
         except Exception: pass
+
+    # Clear corpse query (no corpse anymore)
+    session._send(MSG_CORPSE_QUERY, struct.pack("<B", 0))
 
     # Teleport back to corpse
     from modules.core_world import teleport_player
@@ -1266,11 +1320,22 @@ def _player_resurrect(session):
         try: s._send(SMSG_UPDATE_OBJECT, pkt)
         except Exception: pass
 
+    # Restore original display model
+    original_display = getattr(session, "_original_display_id", None)
+    if original_display:
+        pkt = _build_displayid_update(player_guid, original_display)
+        for s in nearby:
+            try: s._send(SMSG_UPDATE_OBJECT, pkt)
+            except Exception: pass
+
     # Alive update
     pkt = _build_alive_update(player_guid, session.max_health)
     for s in nearby:
         try: s._send(SMSG_UPDATE_OBJECT, pkt)
         except Exception: pass
+
+    # Clear corpse query
+    session._send(MSG_CORPSE_QUERY, struct.pack("<B", 0))
 
     log.info(f"Player {session.char['name']} resurrected with {session.max_health} HP")
     session.send_sys_msg("You have been resurrected!")
